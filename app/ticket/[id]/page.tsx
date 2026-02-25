@@ -120,8 +120,12 @@ export default function TicketPage() {
   // Editable fields
   const [placedDate, setPlacedDate] = useState<string>("");
   const [book, setBook] = useState<string>("");
-  const [bet, setBet] = useState<number>(0);
   const [league, setLeague] = useState<string>("");
+
+  // ✅ Bet Mode + inputs (strings to avoid NaN / clearing issues)
+  const [betMode, setBetMode] = useState<"risk" | "towin">("risk");
+  const [betInput, setBetInput] = useState<string>("0"); // stake / risk
+  const [toWinInput, setToWinInput] = useState<string>(""); // profit target
 
   // Singles status
   const [singleStatus, setSingleStatus] = useState<TicketStatus>("open");
@@ -169,8 +173,10 @@ export default function TicketPage() {
 
       setPlacedDate(isoToYyyyMmDd(ticketRow.placed_at));
       setBook(ticketRow.book ?? "");
-      setBet(ticketRow.stake ?? 0);
       setLeague(ticketRow.league ?? "");
+
+      // ✅ stake as string input
+      setBetInput(String(ticketRow.stake ?? 0));
 
       setSingleStatus(ticketRow.status);
 
@@ -199,6 +205,70 @@ export default function TicketPage() {
     return "push";
   }, [ticket, legs]);
 
+  // ✅ Effective multiplier used for To Win calc (single = its leg; parlay = product; push/void = 1)
+  const { multiplier, multiplierValid } = useMemo(() => {
+    try {
+      if (!ticket) return { multiplier: 1, multiplierValid: false };
+
+      if (ticket.ticket_type === "single") {
+        if (legs.length !== 1) return { multiplier: 1, multiplierValid: false };
+        const a = legs[0].american_odds;
+        if (!Number.isFinite(a) || a === 0) return { multiplier: 1, multiplierValid: false };
+        return { multiplier: americanToDecimal(a), multiplierValid: true };
+      }
+
+      // parlay
+      if (legs.length < 2) return { multiplier: 1, multiplierValid: false };
+
+      let m = 1;
+      for (const l of legs) {
+        if (l.status === "push" || l.status === "void") continue;
+        const a = l.american_odds;
+        if (!Number.isFinite(a) || a === 0) return { multiplier: 1, multiplierValid: false };
+        m *= americanToDecimal(a);
+      }
+      return { multiplier: m, multiplierValid: m > 1 };
+    } catch {
+      return { multiplier: 1, multiplierValid: false };
+    }
+  }, [ticket, legs]);
+
+  function setToWinFromRisk(nextRiskStr: string) {
+    setBetInput(nextRiskStr);
+
+    const stake = Number(nextRiskStr);
+    if (!multiplierValid || !Number.isFinite(stake) || stake < 0) return;
+
+    const profit = stake * (multiplier - 1);
+    setToWinInput(String(round2(profit)));
+  }
+
+  function setRiskFromToWin(nextToWinStr: string) {
+    setToWinInput(nextToWinStr);
+
+    const desiredProfit = Number(nextToWinStr);
+    if (!multiplierValid || !Number.isFinite(desiredProfit) || desiredProfit < 0) return;
+
+    const denom = multiplier - 1;
+    if (denom <= 0) return;
+
+    const stake = desiredProfit / denom;
+    setBetInput(String(round2(stake)));
+  }
+
+  // ✅ Keep paired field synced when multiplier changes (e.g. leg status changes)
+  useEffect(() => {
+    if (!multiplierValid) return;
+    if (betMode === "risk") setToWinFromRisk(betInput);
+    else setRiskFromToWin(toWinInput === "" ? "0" : toWinInput);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [multiplier, multiplierValid]);
+
+  const stakeNum = useMemo(() => {
+    const n = Number(betInput);
+    return Number.isFinite(n) ? n : 0;
+  }, [betInput]);
+
   const computedPayoutProfit = useMemo(() => {
     if (!ticket) {
       return { payout: null as number | null, profit: null as number | null };
@@ -209,7 +279,7 @@ export default function TicketPage() {
       const payoutNum = Number(payoutInput);
       if (Number.isFinite(payoutNum)) {
         const payout = round2(payoutNum);
-        const profit = round2(payout - bet);
+        const profit = round2(payout - stakeNum);
         return { payout, profit };
       }
     }
@@ -218,13 +288,13 @@ export default function TicketPage() {
       const status = singleStatus;
 
       if (status === "open") return { payout: null, profit: null };
-      if (status === "push" || status === "void") return { payout: round2(bet), profit: 0 };
+      if (status === "push" || status === "void") return { payout: round2(stakeNum), profit: 0 };
       if (legs.length !== 1) return { payout: null, profit: null };
-      if (status === "lost") return { payout: 0, profit: round2(0 - bet) };
+      if (status === "lost") return { payout: 0, profit: round2(0 - stakeNum) };
 
       const dec = americanToDecimal(legs[0].american_odds);
-      const payout = round2(bet * dec);
-      const profit = round2(payout - bet);
+      const payout = round2(stakeNum * dec);
+      const profit = round2(payout - stakeNum);
       return { payout, profit };
     }
 
@@ -232,25 +302,31 @@ export default function TicketPage() {
     const pStatus: ParlayStatus = derivedParlayStatus ?? "open";
 
     if (pStatus === "open") return { payout: null, profit: null };
-    if (pStatus === "push" || pStatus === "void") return { payout: round2(bet), profit: 0 };
-    if (pStatus === "lost") return { payout: 0, profit: round2(0 - bet) };
+    if (pStatus === "push" || pStatus === "void") return { payout: round2(stakeNum), profit: 0 };
+    if (pStatus === "lost") return { payout: 0, profit: round2(0 - stakeNum) };
 
-    const multiplier = legs.reduce((acc, l) => {
+    const winMultiplier = legs.reduce((acc, l) => {
       if (l.status === "push" || l.status === "void") return acc * 1;
       const dec = americanToDecimal(l.american_odds);
       return acc * dec;
     }, 1);
 
-    const payout = round2(bet * multiplier);
-    const profit = round2(payout - bet);
+    const payout = round2(stakeNum * winMultiplier);
+    const profit = round2(payout - stakeNum);
     return { payout, profit };
-  }, [ticket, legs, bet, singleStatus, derivedParlayStatus, payoutInput, payoutEdited]);
+  }, [ticket, legs, stakeNum, singleStatus, derivedParlayStatus, payoutInput, payoutEdited]);
 
   async function saveTicketEdits() {
     if (!ticket) return;
 
     if (!placedDate) {
       alert("Please select a date.");
+      return;
+    }
+
+    const stake = Number(betInput);
+    if (!Number.isFinite(stake) || stake <= 0) {
+      alert("Please enter a valid bet amount.");
       return;
     }
 
@@ -262,14 +338,14 @@ export default function TicketPage() {
 
     const { payout, profit } = computedPayoutProfit;
 
-    const settledAtIso = statusToStore === "open" ? null : new Date().toISOString();
+    const settledAtIso = statusToStore === "open" ? null : placedAtIso;
 
     const { error } = await supabase
       .from("tickets")
       .update({
         placed_at: placedAtIso,
         book: book.trim() === "" ? null : book.trim(),
-        stake: bet,
+        stake,
         league: leagueToStore,
         status: statusToStore,
         payout,
@@ -336,7 +412,10 @@ export default function TicketPage() {
             {ticket.league ?? "—"} • {ticket.ticket_type.toUpperCase()}
           </h1>
           <div style={{ marginTop: 6, fontSize: 12, opacity: 0.7 }}>
-            ID: <span style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>{ticket.id}</span>
+            ID:{" "}
+            <span style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>
+              {ticket.id}
+            </span>
           </div>
         </div>
 
@@ -361,7 +440,14 @@ export default function TicketPage() {
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
           <div>
             <div style={{ fontSize: 12, opacity: 0.7 }}>Computed Profit</div>
-            <div style={{ fontSize: 22, fontWeight: 900, color: computedPayoutProfit.profit === null ? "#111" : profitColor(computedPayoutProfit.profit) }}>
+            <div
+              style={{
+                fontSize: 22,
+                fontWeight: 900,
+                color:
+                  computedPayoutProfit.profit === null ? "#111" : profitColor(computedPayoutProfit.profit),
+              }}
+            >
               {computedPayoutProfit.profit === null ? "—" : computedPayoutProfit.profit.toFixed(2)}
             </div>
           </div>
@@ -411,9 +497,81 @@ export default function TicketPage() {
             <input value={book} onChange={(e) => setBook(e.target.value)} placeholder="FanDuel, DK…" style={inputStyle} />
           </div>
 
+          {/* ✅ Bet mode toggle */}
+          <div style={{ gridColumn: "span 6" }}>
+            <FieldLabel>Bet input mode</FieldLabel>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", height: 42 }}>
+              <label style={{ display: "flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
+                <input
+                  type="radio"
+                  name="betMode"
+                  checked={betMode === "risk"}
+                  onChange={() => {
+                    setBetMode("risk");
+                    setToWinFromRisk(betInput);
+                  }}
+                />
+                <span style={{ fontWeight: 800 }}>Risk (Stake)</span>
+              </label>
+
+              <label style={{ display: "flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
+                <input
+                  type="radio"
+                  name="betMode"
+                  checked={betMode === "towin"}
+                  onChange={() => {
+                    setBetMode("towin");
+                    setRiskFromToWin(toWinInput === "" ? "0" : toWinInput);
+                  }}
+                />
+                <span style={{ fontWeight: 800 }}>To Win (Profit)</span>
+              </label>
+
+              <div style={{ marginLeft: "auto", fontSize: 12, opacity: 0.7 }}>
+                {multiplierValid ? (
+                  <>
+                    Multiplier: <b>{round2(multiplier).toFixed(2)}</b>
+                  </>
+                ) : (
+                  <>
+                    Multiplier: <b>—</b>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+
           <div style={{ gridColumn: "span 3" }}>
-            <FieldLabel>Bet</FieldLabel>
-            <input type="number" value={bet} min={0} step="0.01" onChange={(e) => setBet(Number(e.target.value))} style={inputStyle} />
+            <FieldLabel>Stake (Risk)</FieldLabel>
+            <input
+              type="number"
+              value={betInput}
+              min={0}
+              step="0.01"
+              onChange={(e) => {
+                const next = e.target.value;
+                if (betMode === "risk") setToWinFromRisk(next);
+                else setBetInput(next);
+              }}
+              style={{ ...inputStyle, opacity: betMode === "risk" ? 1 : 0.85 }}
+            />
+          </div>
+
+          <div style={{ gridColumn: "span 3" }}>
+            <FieldLabel>To Win (Profit)</FieldLabel>
+            <input
+              type="number"
+              value={toWinInput}
+              min={0}
+              step="0.01"
+              onChange={(e) => {
+                const next = e.target.value;
+                if (betMode === "towin") setRiskFromToWin(next);
+                else setToWinInput(next);
+              }}
+              placeholder={betMode === "towin" ? "" : "Auto (switch to To Win)"}
+              style={{ ...inputStyle, opacity: betMode === "towin" ? 1 : 0.85 }}
+            />
           </div>
 
           <div style={{ gridColumn: "span 3" }}>

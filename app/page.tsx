@@ -80,14 +80,32 @@ function profitColor(n: number) {
 }
 
 function ticketDateForGrouping(t: Ticket) {
-  // Use settled_at if available, else placed_at
-  const iso = t.settled_at ?? t.placed_at;
-  const d = new Date(iso);
+  // ✅ You said placed/settled should always be same day, so use placed_at
+  const d = new Date(t.placed_at);
   return yyyyMmDd(new Date(d.getFullYear(), d.getMonth(), d.getDate()));
 }
 
 function round2(n: number) {
   return Math.round(n * 100) / 100;
+}
+
+function lastDayOfPreviousMonth(now: Date) {
+  // day 0 of current month = last day prev month
+  return new Date(now.getFullYear(), now.getMonth(), 0);
+}
+
+function computeUnitSize(prevMonthEndingBankroll: number) {
+  // 1) 5%
+  const raw = prevMonthEndingBankroll * 0.05;
+
+  // 2) round down to nearest $50
+  const roundedDown = Math.floor(raw / 50) * 50;
+
+  // guard if negative bankroll
+  const nonNegative = Math.max(0, roundedDown);
+
+  // 3) cap at 10k
+  return Math.min(10_000, nonNegative);
 }
 
 export default function DashboardPage() {
@@ -221,7 +239,8 @@ export default function DashboardPage() {
       const passLeague =
         leagueFilter === "ALL" ? true : (t.league ?? "") === leagueFilter;
 
-      const baseIso = t.settled_at ?? t.placed_at;
+      // ✅ Use placed_at only
+      const baseIso = t.placed_at;
 
       const passStart = !startIso ? true : baseIso >= startIso;
       const passEnd = !endExclusiveIso ? true : baseIso < endExclusiveIso;
@@ -259,6 +278,40 @@ export default function DashboardPage() {
       record: `${wins}-${losses}-${pushes}`,
     };
   }, [filteredTickets]);
+
+  // ✅ Unit size (calculated from prev month ending bankroll, based on placed_at)
+  const unitCard = useMemo(() => {
+    const now = new Date();
+    const prevMonthEnd = lastDayOfPreviousMonth(now);
+
+    // exclusive upper bound: midnight after prevMonthEnd
+    const prevMonthEndIsoExclusive = new Date(
+      prevMonthEnd.getFullYear(),
+      prevMonthEnd.getMonth(),
+      prevMonthEnd.getDate() + 1,
+      0,
+      0,
+      0
+    ).toISOString();
+
+    // NOTE: This assumes your "ending bankroll" is derived from realized profit.
+    // If you later add a stored bankroll baseline, you can plug it in here.
+    const realizedProfitUpToPrevMonthEnd = tickets.reduce((acc, t) => {
+      const baseIso = t.placed_at; // ✅ use placed_at only
+      if (baseIso >= prevMonthEndIsoExclusive) return acc;
+      if (typeof t.profit === "number" && Number.isFinite(t.profit)) return acc + t.profit;
+      return acc;
+    }, 0);
+
+    const prevMonthEndingBankroll = round2(realizedProfitUpToPrevMonthEnd);
+    const unitSize = computeUnitSize(prevMonthEndingBankroll);
+
+    return {
+      prevMonthEndLabel: yyyyMmDd(prevMonthEnd),
+      prevMonthEndingBankroll,
+      unitSize,
+    };
+  }, [tickets]);
 
   const chartData = useMemo(() => {
     // Group by day, sum profits, then compute cumulative
@@ -380,7 +433,7 @@ export default function DashboardPage() {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+          gridTemplateColumns: "repeat(5, minmax(0, 1fr))",
           gap: 12,
           marginTop: 16,
         }}
@@ -397,12 +450,14 @@ export default function DashboardPage() {
             {fmtMoney(summary.totalProfit)}
           </div>
         </div>
+
         <div style={{ border: "1px solid #eee", borderRadius: 10, padding: 12 }}>
           <div style={{ fontSize: 12, opacity: 0.7 }}>Total Bet</div>
           <div style={{ fontSize: 22, fontWeight: 800 }}>
             {fmtMoney(summary.totalBet)}
           </div>
         </div>
+
         <div style={{ border: "1px solid #eee", borderRadius: 10, padding: 12 }}>
           <div style={{ fontSize: 12, opacity: 0.7 }}>ROI</div>
           <div
@@ -415,9 +470,29 @@ export default function DashboardPage() {
             {summary.roi.toFixed(2)}%
           </div>
         </div>
+
         <div style={{ border: "1px solid #eee", borderRadius: 10, padding: 12 }}>
           <div style={{ fontSize: 12, opacity: 0.7 }}>Record (W-L-P)</div>
           <div style={{ fontSize: 22, fontWeight: 800 }}>{summary.record}</div>
+        </div>
+
+        {/* ✅ Unit size card (with clarified logic text) */}
+        <div style={{ border: "1px solid #eee", borderRadius: 10, padding: 12 }}>
+          <div style={{ fontSize: 12, opacity: 0.7 }}>Unit Size</div>
+
+          <div style={{ fontSize: 22, fontWeight: 900 }}>
+            {fmtMoney(unitCard.unitSize)}
+          </div>
+
+          <div style={{ marginTop: 6, fontSize: 12, opacity: 0.7, lineHeight: 1.4 }}>
+            5% of {fmtMoney(unitCard.prevMonthEndingBankroll)}
+            <br />
+            Rounded down to nearest $50
+            <br />
+            Max cap: $10,000
+            <br />
+            As of {unitCard.prevMonthEndLabel}
+          </div>
         </div>
       </div>
 
@@ -479,7 +554,9 @@ export default function DashboardPage() {
                 </div>
                 <div style={{ fontSize: 12, opacity: 0.75 }}>
                   Bet: {fmtMoney(t.stake)}
-                  {typeof t.payout === "number" ? ` • Payout: ${fmtMoney(t.payout)}` : ""}
+                  {typeof t.payout === "number"
+                    ? ` • Payout: ${fmtMoney(t.payout)}`
+                    : ""}
                 </div>
               </div>
 

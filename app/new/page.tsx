@@ -70,9 +70,26 @@ const rowStyle: React.CSSProperties = {
   gap: 12,
 };
 
+function americanToDecimal(american: number): number {
+  if (!Number.isFinite(american) || american === 0) throw new Error("Invalid American odds");
+  if (american > 0) return 1 + american / 100;
+  return 1 + 100 / Math.abs(american);
+}
+
+function round2(n: number) {
+  return Math.round(n * 100) / 100;
+}
+
 export default function NewTicketPage() {
   const [ticketType, setTicketType] = useState<"single" | "parlay">("single");
-  const [bet, setBet] = useState<number>(50);
+
+  // ✅ Bet Mode
+  const [betMode, setBetMode] = useState<"risk" | "towin">("risk");
+
+  // store as strings so the user can clear the input without NaN fights
+  const [betInput, setBetInput] = useState<string>("50"); // stake / risk
+  const [toWinInput, setToWinInput] = useState<string>(""); // profit target
+
   const [book, setBook] = useState<string>("");
   const [league, setLeague] = useState<string>("");
 
@@ -93,6 +110,32 @@ export default function NewTicketPage() {
     setLegs([...legs, { selection: "", american_odds: "-110", status: "open" }]);
   const removeLeg = (idx: number) => setLegs(legs.filter((_, i) => i !== idx));
 
+  // ✅ derive decimal multiplier for the ticket (single or parlay)
+  const { multiplier, multiplierValid } = useMemo(() => {
+    try {
+      if (ticketType === "single") {
+        if (legs.length !== 1) return { multiplier: 1, multiplierValid: false };
+        const a = Number(legs[0].american_odds);
+        if (!Number.isFinite(a) || a === 0) return { multiplier: 1, multiplierValid: false };
+        return { multiplier: americanToDecimal(a), multiplierValid: true };
+      }
+
+      // parlay: product of decimals (treat push/void as 1)
+      if (legs.length < 2) return { multiplier: 1, multiplierValid: false };
+
+      let m = 1;
+      for (const l of legs) {
+        if (l.status === "push" || l.status === "void") continue;
+        const a = Number(l.american_odds);
+        if (!Number.isFinite(a) || a === 0) return { multiplier: 1, multiplierValid: false };
+        m *= americanToDecimal(a);
+      }
+      return { multiplier: m, multiplierValid: m > 1 };
+    } catch {
+      return { multiplier: 1, multiplierValid: false };
+    }
+  }, [ticketType, legs]);
+
   const derivedParlayStatus = useMemo(() => {
     if (ticketType !== "parlay") return null;
     if (legs.some((l) => l.status === "lost")) return "lost";
@@ -103,6 +146,30 @@ export default function NewTicketPage() {
     if (legs.some((l) => l.status === "won")) return "won";
     return "push";
   }, [ticketType, legs]);
+
+  function setRiskFromToWin(nextToWinStr: string) {
+    setToWinInput(nextToWinStr);
+
+    const desiredProfit = Number(nextToWinStr);
+    if (!multiplierValid || !Number.isFinite(desiredProfit) || desiredProfit < 0) return;
+
+    // profit = stake * (multiplier - 1)  => stake = profit / (multiplier - 1)
+    const denom = multiplier - 1;
+    if (denom <= 0) return;
+
+    const stake = desiredProfit / denom;
+    setBetInput(String(round2(stake)));
+  }
+
+  function setToWinFromRisk(nextRiskStr: string) {
+    setBetInput(nextRiskStr);
+
+    const stake = Number(nextRiskStr);
+    if (!multiplierValid || !Number.isFinite(stake) || stake < 0) return;
+
+    const profit = stake * (multiplier - 1);
+    setToWinInput(String(round2(profit)));
+  }
 
   async function save() {
     const user = (await supabase.auth.getUser()).data.user;
@@ -146,8 +213,15 @@ export default function NewTicketPage() {
       return;
     }
 
+    const stakeNum = Number(betInput);
+    if (!Number.isFinite(stakeNum) || stakeNum <= 0) {
+      alert("Please enter a valid bet amount.");
+      return;
+    }
+
     const placedAtIso = new Date(placedDate + "T00:00:00").toISOString();
-    const statusToStore = ticketType === "parlay" ? (derivedParlayStatus as any) : ticketStatus;
+    const statusToStore =
+      ticketType === "parlay" ? (derivedParlayStatus as any) : ticketStatus;
     const leagueToStore = league.trim() === "" ? null : league.trim();
 
     const { data: ticket, error: ticketErr } = await supabase
@@ -155,7 +229,7 @@ export default function NewTicketPage() {
       .insert({
         user_id: user.id,
         ticket_type: ticketType,
-        stake: bet,
+        stake: stakeNum,
         book: book || null,
         league: leagueToStore,
         status: statusToStore,
@@ -272,15 +346,84 @@ export default function NewTicketPage() {
             />
           </div>
 
+          {/* ✅ Bet mode toggle */}
+          <div style={{ gridColumn: "span 6" }}>
+            <FieldLabel>Bet input mode</FieldLabel>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", height: 42 }}>
+              <label style={{ display: "flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
+                <input
+                  type="radio"
+                  name="betMode"
+                  checked={betMode === "risk"}
+                  onChange={() => {
+                    setBetMode("risk");
+                    // when switching to risk, keep current stake and compute toWin
+                    setToWinFromRisk(betInput);
+                  }}
+                />
+                <span style={{ fontWeight: 800 }}>Risk (Stake)</span>
+              </label>
+
+              <label style={{ display: "flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
+                <input
+                  type="radio"
+                  name="betMode"
+                  checked={betMode === "towin"}
+                  onChange={() => {
+                    setBetMode("towin");
+                    // when switching to toWin, keep current toWin and compute stake
+                    setRiskFromToWin(toWinInput === "" ? "0" : toWinInput);
+                  }}
+                />
+                <span style={{ fontWeight: 800 }}>To Win (Profit)</span>
+              </label>
+
+              <div style={{ marginLeft: "auto", fontSize: 12, opacity: 0.7 }}>
+                {multiplierValid ? (
+                  <>Multiplier: <b>{round2(multiplier).toFixed(2)}</b></>
+                ) : (
+                  <>Multiplier: <b>—</b></>
+                )}
+              </div>
+            </div>
+          </div>
+
           <div style={{ gridColumn: "span 3" }}>
-            <FieldLabel>Bet</FieldLabel>
+            <FieldLabel>Stake (Risk)</FieldLabel>
             <input
               type="number"
-              value={bet}
+              value={betInput}
               min={0}
               step="0.01"
-              onChange={(e) => setBet(Number(e.target.value))}
-              style={inputStyle}
+              onChange={(e) => {
+                const next = e.target.value;
+                if (betMode === "risk") setToWinFromRisk(next);
+                else setBetInput(next); // allow viewing/editing even if not active
+              }}
+              style={{
+                ...inputStyle,
+                opacity: betMode === "risk" ? 1 : 0.85,
+              }}
+            />
+          </div>
+
+          <div style={{ gridColumn: "span 3" }}>
+            <FieldLabel>To Win (Profit)</FieldLabel>
+            <input
+              type="number"
+              value={toWinInput}
+              min={0}
+              step="0.01"
+              onChange={(e) => {
+                const next = e.target.value;
+                if (betMode === "towin") setRiskFromToWin(next);
+                else setToWinInput(next);
+              }}
+              placeholder={betMode === "towin" ? "" : "Auto (switch to To Win)"}
+              style={{
+                ...inputStyle,
+                opacity: betMode === "towin" ? 1 : 0.85,
+              }}
             />
           </div>
 
@@ -384,6 +527,15 @@ export default function NewTicketPage() {
                     const copy = [...legs];
                     copy[idx] = { ...copy[idx], american_odds: e.target.value };
                     setLegs(copy);
+
+                    // keep the paired field synced when odds change
+                    // (only when multiplier is valid after this change, which is recalculated via useMemo)
+                    // We'll trigger recompute in a tiny next tick by using current betMode + existing inputs.
+                    // This is safe and avoids useEffect loops.
+                    setTimeout(() => {
+                      if (betMode === "risk") setToWinFromRisk(betInput);
+                      else setRiskFromToWin(toWinInput);
+                    }, 0);
                   }}
                   style={inputStyle}
                 />
@@ -397,6 +549,11 @@ export default function NewTicketPage() {
                     const copy = [...legs];
                     copy[idx] = { ...copy[idx], status: e.target.value as any };
                     setLegs(copy);
+
+                    setTimeout(() => {
+                      if (betMode === "risk") setToWinFromRisk(betInput);
+                      else setRiskFromToWin(toWinInput);
+                    }, 0);
                   }}
                   style={selectStyle}
                 >
