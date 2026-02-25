@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "../lib/supabase";
 import {
   LineChart,
@@ -85,7 +86,16 @@ function ticketDateForGrouping(t: Ticket) {
   return yyyyMmDd(new Date(d.getFullYear(), d.getMonth(), d.getDate()));
 }
 
+function round2(n: number) {
+  return Math.round(n * 100) / 100;
+}
+
 export default function DashboardPage() {
+  const router = useRouter();
+
+  // ✅ Auth gate
+  const [authChecked, setAuthChecked] = useState(false);
+
   const [loading, setLoading] = useState(true);
   const [tickets, setTickets] = useState<Ticket[]>([]);
 
@@ -99,9 +109,41 @@ export default function DashboardPage() {
   );
   const [customEnd, setCustomEnd] = useState<string>(() => yyyyMmDd(new Date()));
 
+  // ✅ Require session or redirect
   useEffect(() => {
+    let alive = true;
+
+    async function checkSession() {
+      const { data, error } = await supabase.auth.getSession();
+      if (!alive) return;
+
+      if (error || !data.session) {
+        router.replace("/login");
+        return;
+      }
+
+      setAuthChecked(true);
+    }
+
+    checkSession();
+
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session) router.replace("/login");
+    });
+
+    return () => {
+      alive = false;
+      sub.subscription.unsubscribe();
+    };
+  }, [router]);
+
+  // ✅ Only load tickets after auth is confirmed
+  useEffect(() => {
+    if (!authChecked) return;
+
     async function load() {
       setLoading(true);
+
       const { data, error } = await supabase
         .from("tickets")
         .select(
@@ -121,7 +163,7 @@ export default function DashboardPage() {
     }
 
     load();
-  }, []);
+  }, [authChecked]);
 
   const { rangeStart, rangeEndInclusive } = useMemo(() => {
     const now = new Date();
@@ -236,6 +278,7 @@ export default function DashboardPage() {
     });
   }, [filteredTickets]);
 
+  if (!authChecked) return <div style={{ padding: 24 }}>Checking session…</div>;
   if (loading) return <div style={{ padding: 24 }}>Loading…</div>;
 
   return (
@@ -248,7 +291,25 @@ export default function DashboardPage() {
         }}
       >
         <h1 style={{ margin: 0 }}>Dashboard</h1>
-        <Link href="/new">+ New Bet</Link>
+
+        <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+          <Link href="/new">+ New Bet</Link>
+          <button
+            onClick={async () => {
+              await supabase.auth.signOut();
+              router.replace("/login");
+            }}
+            style={{
+              padding: "6px 10px",
+              border: "1px solid #ddd",
+              borderRadius: 8,
+              background: "white",
+              cursor: "pointer",
+            }}
+          >
+            Log out
+          </button>
+        </div>
       </div>
 
       <div
@@ -338,7 +399,9 @@ export default function DashboardPage() {
         </div>
         <div style={{ border: "1px solid #eee", borderRadius: 10, padding: 12 }}>
           <div style={{ fontSize: 12, opacity: 0.7 }}>Total Bet</div>
-          <div style={{ fontSize: 22, fontWeight: 800 }}>{fmtMoney(summary.totalBet)}</div>
+          <div style={{ fontSize: 22, fontWeight: 800 }}>
+            {fmtMoney(summary.totalBet)}
+          </div>
         </div>
         <div style={{ border: "1px solid #eee", borderRadius: 10, padding: 12 }}>
           <div style={{ fontSize: 12, opacity: 0.7 }}>ROI</div>
@@ -358,7 +421,14 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      <div style={{ marginTop: 18, border: "1px solid #eee", borderRadius: 10, padding: 12 }}>
+      <div
+        style={{
+          marginTop: 18,
+          border: "1px solid #eee",
+          borderRadius: 10,
+          padding: 12,
+        }}
+      >
         <div style={{ fontWeight: 700, marginBottom: 8 }}>Cumulative Profit</div>
         <div style={{ height: 260 }}>
           <ResponsiveContainer width="100%" height="100%">
@@ -367,7 +437,12 @@ export default function DashboardPage() {
               <XAxis dataKey="date" tick={{ fontSize: 12 }} />
               <YAxis tick={{ fontSize: 12 }} />
               <Tooltip />
-              <Line type="monotone" dataKey="cumulativeProfit" strokeWidth={2} dot={false} />
+              <Line
+                type="monotone"
+                dataKey="cumulativeProfit"
+                strokeWidth={2}
+                dot={false}
+              />
             </LineChart>
           </ResponsiveContainer>
         </div>
@@ -396,7 +471,8 @@ export default function DashboardPage() {
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
               <div style={{ display: "grid", gap: 4 }}>
                 <div style={{ fontWeight: 800 }}>
-                  {t.league ?? "—"} • {t.ticket_type.toUpperCase()} • {t.status.toUpperCase()}
+                  {t.league ?? "—"} • {t.ticket_type.toUpperCase()} •{" "}
+                  {t.status.toUpperCase()}
                 </div>
                 <div style={{ fontSize: 12, opacity: 0.75 }}>
                   Date: {ticketDateForGrouping(t)} • Book: {t.book ?? "—"}
@@ -413,7 +489,8 @@ export default function DashboardPage() {
                   style={{
                     fontSize: 18,
                     fontWeight: 900,
-                    color: typeof t.profit === "number" ? profitColor(t.profit) : "#111",
+                    color:
+                      typeof t.profit === "number" ? profitColor(t.profit) : "#111",
                   }}
                 >
                   {typeof t.profit === "number" ? fmtMoney(t.profit) : "—"}
@@ -425,8 +502,4 @@ export default function DashboardPage() {
       </div>
     </div>
   );
-}
-
-function round2(n: number) {
-  return Math.round(n * 100) / 100;
 }
