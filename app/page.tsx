@@ -1,6 +1,6 @@
 /* =========================================================
    PASTE THIS FILE AT:
-   /app/page.tsx   (your Dashboard)
+   /app/page.tsx
    ========================================================= */
 
 "use client";
@@ -57,7 +57,7 @@ const LEAGUE_OPTIONS = [
 type DatePreset = "7D" | "30D" | "MTD" | "LAST_MONTH" | "ALL" | "CUSTOM";
 type GraphMode = "BANKROLL" | "PROFIT";
 type StatusFilter = "ALL" | Ticket["status"];
-type DashboardTab = "OVERVIEW" | "OPEN" | "HISTORY";
+type DashboardTab = "OVERVIEW" | "OPEN" | "HISTORY" | "PERSONAL";
 
 function pad2(n: number) {
   return String(n).padStart(2, "0");
@@ -123,10 +123,41 @@ function profitColor(n: number) {
   return "#111";
 }
 
+// Accurate-ish Y/M/D diff (calendar-aware)
+function diffYMD(from: Date, to: Date) {
+  let start = new Date(from.getFullYear(), from.getMonth(), from.getDate());
+  let end = new Date(to.getFullYear(), to.getMonth(), to.getDate());
+  if (end < start) [start, end] = [end, start];
+
+  let years = end.getFullYear() - start.getFullYear();
+  let anchor = new Date(start);
+  anchor.setFullYear(start.getFullYear() + years);
+  if (anchor > end) {
+    years -= 1;
+    anchor = new Date(start);
+    anchor.setFullYear(start.getFullYear() + years);
+  }
+
+  let months = end.getMonth() - anchor.getMonth();
+  if (months < 0) months += 12;
+
+  let anchor2 = new Date(anchor);
+  anchor2.setMonth(anchor.getMonth() + months);
+  if (anchor2 > end) {
+    months -= 1;
+    anchor2 = new Date(anchor);
+    anchor2.setMonth(anchor.getMonth() + months);
+  }
+
+  const msPerDay = 24 * 60 * 60 * 1000;
+  const days = Math.max(0, Math.round((end.getTime() - anchor2.getTime()) / msPerDay));
+
+  return { years, months, days };
+}
+
 function CustomTooltip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
 
-  // pick first non-null value so tooltips work with split lines (pos/neg)
   const first = payload.find((p: any) => typeof p?.value === "number");
   const name = first?.name ?? "Value";
   const value = typeof first?.value === "number" ? first.value : null;
@@ -142,25 +173,41 @@ function CustomTooltip({ active, payload, label }: any) {
   );
 }
 
+function Card({
+  title,
+  children,
+  subtitle,
+}: {
+  title: string;
+  subtitle?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-2xl border border-zinc-200 bg-white p-4">
+      <div className="text-xs opacity-70">{title}</div>
+      {subtitle ? <div className="mt-1 text-xs opacity-60">{subtitle}</div> : null}
+      <div className="mt-2">{children}</div>
+    </div>
+  );
+}
+
 export default function DashboardPage() {
   const router = useRouter();
 
   const [authChecked, setAuthChecked] = useState(false);
   const [loading, setLoading] = useState(true);
+
   const [tickets, setTickets] = useState<Ticket[]>([]);
+  const [userEmail, setUserEmail] = useState<string>("");
 
   const [startingBankroll, setStartingBankroll] = useState<number>(0);
   const [profileLoading, setProfileLoading] = useState(true);
   const [profileSaving, setProfileSaving] = useState(false);
 
   const [leagueFilter, setLeagueFilter] = useState<string>("ALL");
-
   const [preset, setPreset] = useState<DatePreset>("MTD");
-  const [customStart, setCustomStart] = useState<string>(() =>
-    yyyyMmDd(addDays(new Date(), -29))
-  );
+  const [customStart, setCustomStart] = useState<string>(() => yyyyMmDd(addDays(new Date(), -29)));
   const [customEnd, setCustomEnd] = useState<string>(() => yyyyMmDd(new Date()));
-
   const [graphMode, setGraphMode] = useState<GraphMode>("BANKROLL");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
 
@@ -179,6 +226,7 @@ export default function DashboardPage() {
         return;
       }
 
+      setUserEmail(data.session.user.email ?? "");
       setAuthChecked(true);
     }
 
@@ -186,6 +234,7 @@ export default function DashboardPage() {
 
     const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!session) router.replace("/login");
+      setUserEmail(session?.user?.email ?? "");
     });
 
     return () => {
@@ -228,7 +277,6 @@ export default function DashboardPage() {
     }
 
     loadProfile();
-
     return () => {
       alive = false;
     };
@@ -251,7 +299,6 @@ export default function DashboardPage() {
       .upsert({ id: uid, starting_bankroll: safe });
 
     setProfileSaving(false);
-
     if (error) alert(error.message);
   }
 
@@ -260,9 +307,7 @@ export default function DashboardPage() {
 
     const { data, error } = await supabase
       .from("tickets")
-      .select(
-        "id, ticket_type, stake, status, book, payout, profit, placed_at, settled_at, league"
-      )
+      .select("id, ticket_type, stake, status, book, payout, profit, placed_at, settled_at, league")
       .order("placed_at", { ascending: false });
 
     if (error) {
@@ -284,10 +329,8 @@ export default function DashboardPage() {
 
   const { rangeStart, rangeEndInclusive } = useMemo(() => {
     const now = new Date();
-    if (preset === "ALL")
-      return { rangeStart: null as string | null, rangeEndInclusive: null as string | null };
-    if (preset === "CUSTOM")
-      return { rangeStart: customStart || null, rangeEndInclusive: customEnd || null };
+    if (preset === "ALL") return { rangeStart: null as string | null, rangeEndInclusive: null as string | null };
+    if (preset === "CUSTOM") return { rangeStart: customStart || null, rangeEndInclusive: customEnd || null };
     if (preset === "7D") return { rangeStart: yyyyMmDd(addDays(now, -6)), rangeEndInclusive: yyyyMmDd(now) };
     if (preset === "30D") return { rangeStart: yyyyMmDd(addDays(now, -29)), rangeEndInclusive: yyyyMmDd(now) };
     if (preset === "MTD") return { rangeStart: yyyyMmDd(startOfMonth(now)), rangeEndInclusive: yyyyMmDd(now) };
@@ -396,7 +439,6 @@ export default function DashboardPage() {
   const chartData = useMemo(() => {
     const startIso = rangeStart ? toLocalMidnightIso(rangeStart) : null;
 
-    // bankroll baseline includes profit BEFORE the selected range
     const profitBeforeRange = tickets.reduce((acc, t) => {
       const passLeague = leagueFilter === "ALL" ? true : (t.league ?? "") === leagueFilter;
       if (!passLeague) return acc;
@@ -409,7 +451,6 @@ export default function DashboardPage() {
 
     const baselineBankroll = round2((Number(startingBankroll) || 0) + profitBeforeRange);
 
-    // day -> sum profit for tickets IN the selected range
     const map = new Map<string, number>();
     for (const t of filteredTickets) {
       const day = ticketDateForGrouping(t);
@@ -432,14 +473,11 @@ export default function DashboardPage() {
         date: d,
         bankroll: round2(runningBankroll),
         profitInRange: p,
-        // split series (so line flips red/green at 0)
         profitPos: p >= 0 ? p : null,
         profitNeg: p < 0 ? p : null,
       };
     });
   }, [filteredTickets, tickets, startingBankroll, leagueFilter, rangeStart]);
-
-  const chartTitle = graphMode === "BANKROLL" ? "Bankroll" : "Profit (Range)";
 
   const openTicketsAll = useMemo(() => tickets.filter((t) => t.status === "open"), [tickets]);
   const openTickets = useMemo(
@@ -451,13 +489,23 @@ export default function DashboardPage() {
     [statusFilteredTickets]
   );
 
+  const firstTicketDate = useMemo(() => {
+    if (!tickets.length) return null;
+    let min = tickets[0].placed_at;
+    for (const t of tickets) if (t.placed_at < min) min = t.placed_at;
+    return new Date(min);
+  }, [tickets]);
+
+  const experience = useMemo(() => {
+    if (!firstTicketDate) return null;
+    return diffYMD(firstTicketDate, new Date());
+  }, [firstTicketDate]);
+
   async function quickSettleTicket(ticket: Ticket, nextStatus: Ticket["status"]) {
     if (quickUpdatingId) return;
-
     setQuickUpdatingId(ticket.id);
 
     try {
-      // pull legs so we can compute payout/profit for quick Win/Loss
       const { data: legs, error: legsErr } = await supabase
         .from("legs")
         .select("id, ticket_id, american_odds, status")
@@ -466,8 +514,6 @@ export default function DashboardPage() {
       if (legsErr) throw legsErr;
 
       const legsArr = (legs ?? []) as Leg[];
-
-      // compute payout/profit
       const stake = Number(ticket.stake || 0);
       const settledAt = new Date().toISOString();
 
@@ -490,7 +536,6 @@ export default function DashboardPage() {
           payout = round2(stake * dec);
           profit = round2(payout - stake);
         } else {
-          // parlay: multiply decimal odds, ignore push/void legs as 1.0
           const m = legsArr.reduce((acc, l) => {
             if (l.status === "push" || l.status === "void") return acc * 1;
             return acc * americanToDecimal(Number(l.american_odds));
@@ -512,7 +557,6 @@ export default function DashboardPage() {
 
       if (tErr) throw tErr;
 
-      // keep legs roughly consistent for dashboard actions
       if (legsArr.length) {
         const legStatus: Leg["status"] =
           nextStatus === "won"
@@ -525,23 +569,13 @@ export default function DashboardPage() {
             ? "void"
             : "open";
 
-        await supabase
-          .from("legs")
-          .update({ status: legStatus })
-          .eq("ticket_id", ticket.id);
+        await supabase.from("legs").update({ status: legStatus }).eq("ticket_id", ticket.id);
       }
 
-      // optimistic local update
       setTickets((prev) =>
         prev.map((t) =>
           t.id === ticket.id
-            ? {
-                ...t,
-                status: nextStatus,
-                payout,
-                profit,
-                settled_at: nextStatus === "open" ? null : settledAt,
-              }
+            ? { ...t, status: nextStatus, payout, profit, settled_at: nextStatus === "open" ? null : settledAt }
             : t
         )
       );
@@ -553,27 +587,19 @@ export default function DashboardPage() {
     }
   }
 
-  function TabButton({
-    id,
-    label,
-    count,
-  }: {
-    id: DashboardTab;
-    label: string;
-    count?: number;
-  }) {
+  function BottomTabButton({ id, label }: { id: DashboardTab; label: string }) {
     const active = tab === id;
     return (
       <button
         onClick={() => setTab(id)}
-        className="h-11 rounded-xl border border-zinc-200 px-4 font-extrabold"
-        style={{
-          background: active ? "#111" : "white",
-          color: active ? "white" : "#111",
-        }}
+        className="flex flex-1 flex-col items-center justify-center gap-0.5 py-2 text-xs font-extrabold"
+        style={{ color: active ? "#111" : "rgba(0,0,0,0.55)" }}
       >
-        {label}
-        {typeof count === "number" ? ` (${fmtNumber(count)})` : ""}
+        <div
+          className="h-1.5 w-10 rounded-full"
+          style={{ background: active ? "#111" : "transparent" }}
+        />
+        <div>{label}</div>
       </button>
     );
   }
@@ -582,207 +608,166 @@ export default function DashboardPage() {
   if (loading) return <div className="px-4 py-6">Loading…</div>;
 
   return (
-    <div className="mx-auto w-full max-w-6xl px-4 py-5 sm:px-6">
+    <div className="mx-auto w-full max-w-6xl px-4 py-5 sm:px-6 pb-24">
       {/* Header */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="text-2xl font-black tracking-tight">Dashboard</h1>
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-xs opacity-70">Dashboard</div>
+          <h1 className="text-2xl font-black tracking-tight">
+            {tab === "OVERVIEW"
+              ? "Overview"
+              : tab === "OPEN"
+              ? "Open"
+              : tab === "HISTORY"
+              ? "History"
+              : "Personal"}
+          </h1>
+        </div>
 
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+        <div className="flex items-center gap-2">
           <Link
             href="/new"
-            className="inline-flex h-11 items-center justify-center rounded-xl border border-zinc-200 bg-white px-4 font-bold"
+            className="inline-flex h-10 items-center justify-center rounded-xl border border-zinc-200 bg-white px-3 text-sm font-bold"
           >
-            + New Bet
+            + New
           </Link>
 
+          {/* ✅ smaller logout */}
           <button
             onClick={async () => {
               await supabase.auth.signOut();
               router.replace("/login");
             }}
-            className="inline-flex h-11 items-center justify-center rounded-xl border border-zinc-200 bg-white px-4 font-bold"
+            className="inline-flex h-9 items-center justify-center rounded-xl border border-zinc-200 bg-white px-3 text-xs font-bold"
           >
             Log out
           </button>
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="mt-4 flex flex-wrap gap-2">
-        <TabButton id="OVERVIEW" label="Overview" />
-        <TabButton id="OPEN" label="Open" count={openTicketsAll.length} />
-        <TabButton id="HISTORY" label="History" count={tickets.length - openTicketsAll.length} />
-      </div>
+      {/* Filters (apply to overview + lists) */}
+      {tab !== "PERSONAL" && (
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <label className="grid gap-1.5">
+            <span className="text-xs opacity-70">League</span>
+            <select
+              value={leagueFilter}
+              onChange={(e) => setLeagueFilter(e.target.value)}
+              className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
+            >
+              <option value="ALL">All</option>
+              {LEAGUE_OPTIONS.map((l) => (
+                <option key={l} value={l}>
+                  {l}
+                </option>
+              ))}
+            </select>
+          </label>
 
-      {/* Filters (apply to Overview charts + ticket lists) */}
-      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <label className="grid gap-1.5">
-          <span className="text-xs opacity-70">League</span>
-          <select
-            value={leagueFilter}
-            onChange={(e) => setLeagueFilter(e.target.value)}
-            className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
-          >
-            <option value="ALL">All</option>
-            {LEAGUE_OPTIONS.map((l) => (
-              <option key={l} value={l}>
-                {l}
-              </option>
-            ))}
-          </select>
-        </label>
+          <label className="grid gap-1.5">
+            <span className="text-xs opacity-70">Date Range</span>
+            <select
+              value={preset}
+              onChange={(e) => setPreset(e.target.value as DatePreset)}
+              className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
+            >
+              <option value="7D">Last 7 Days</option>
+              <option value="30D">Last 30 Days</option>
+              <option value="MTD">MTD</option>
+              <option value="LAST_MONTH">Last Month</option>
+              <option value="ALL">All-Time</option>
+              <option value="CUSTOM">Custom</option>
+            </select>
+          </label>
 
-        <label className="grid gap-1.5">
-          <span className="text-xs opacity-70">Date Range</span>
-          <select
-            value={preset}
-            onChange={(e) => setPreset(e.target.value as DatePreset)}
-            className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
-          >
-            <option value="7D">Last 7 Days</option>
-            <option value="30D">Last 30 Days</option>
-            <option value="MTD">MTD</option>
-            <option value="LAST_MONTH">Last Month</option>
-            <option value="ALL">All-Time</option>
-            <option value="CUSTOM">Custom</option>
-          </select>
-        </label>
+          <label className="grid gap-1.5">
+            <span className="text-xs opacity-70">Status</span>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+              className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
+            >
+              <option value="ALL">All</option>
+              <option value="open">open</option>
+              <option value="won">won</option>
+              <option value="lost">lost</option>
+              <option value="push">push</option>
+              <option value="void">void</option>
+              <option value="partial">partial</option>
+            </select>
+          </label>
 
-        <label className="grid gap-1.5">
-          <span className="text-xs opacity-70">Status</span>
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
-            className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
-          >
-            <option value="ALL">All</option>
-            <option value="open">open</option>
-            <option value="won">won</option>
-            <option value="lost">lost</option>
-            <option value="push">push</option>
-            <option value="void">void</option>
-            <option value="partial">partial</option>
-          </select>
-        </label>
+          {preset === "CUSTOM" && (
+            <>
+              <label className="grid gap-1.5">
+                <span className="text-xs opacity-70">Start</span>
+                <input
+                  type="date"
+                  value={customStart}
+                  onChange={(e) => setCustomStart(e.target.value)}
+                  className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
+                />
+              </label>
 
-        {preset === "CUSTOM" && (
-          <>
-            <label className="grid gap-1.5">
-              <span className="text-xs opacity-70">Start</span>
-              <input
-                type="date"
-                value={customStart}
-                onChange={(e) => setCustomStart(e.target.value)}
-                className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
-              />
-            </label>
-
-            <label className="grid gap-1.5">
-              <span className="text-xs opacity-70">End</span>
-              <input
-                type="date"
-                value={customEnd}
-                onChange={(e) => setCustomEnd(e.target.value)}
-                className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
-              />
-            </label>
-          </>
-        )}
-      </div>
+              <label className="grid gap-1.5">
+                <span className="text-xs opacity-70">End</span>
+                <input
+                  type="date"
+                  value={customEnd}
+                  onChange={(e) => setCustomEnd(e.target.value)}
+                  className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
+                />
+              </label>
+            </>
+          )}
+        </div>
+      )}
 
       {/* OVERVIEW */}
       {tab === "OVERVIEW" && (
         <>
-          {/* Stat Cards */}
           <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {/* Starting Bankroll */}
-            <div className="rounded-2xl border border-zinc-200 bg-white p-4">
-              <div className="text-xs opacity-70">Starting Bankroll</div>
-
-              {profileLoading ? (
-                <div className="mt-2 text-sm opacity-70">Loading…</div>
-              ) : (
-                <>
-                  <div className="mt-2">
-                    <input
-                      type="number"
-                      value={startingBankroll}
-                      onChange={(e) => setStartingBankroll(Number(e.target.value))}
-                      className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
-                    />
-                  </div>
-
-                  <button
-                    onClick={saveStartingBankroll}
-                    disabled={profileSaving}
-                    className="mt-2 inline-flex h-11 w-full items-center justify-center rounded-xl border border-zinc-200 bg-white font-bold disabled:opacity-60"
-                  >
-                    {profileSaving ? "Saving…" : "Save"}
-                  </button>
-                </>
-              )}
-            </div>
-
-            {/* Current Bankroll */}
-            <div className="rounded-2xl border border-zinc-200 bg-white p-4">
-              <div className="text-xs opacity-70">Current Bankroll</div>
-              <div
-                className="mt-1 text-2xl font-black"
-                style={{ color: profitColor(currentBankroll - startingBankroll) }}
-              >
+            <Card title="Current Bankroll" subtitle="Starting + all-time profit">
+              <div className="text-2xl font-black" style={{ color: profitColor(currentBankroll - startingBankroll) }}>
                 {fmtMoney(currentBankroll)}
               </div>
-              <div className="mt-1 text-xs leading-snug opacity-70">Starting + all-time profit</div>
-            </div>
+            </Card>
 
-            {/* Total Profit */}
-            <div className="rounded-2xl border border-zinc-200 bg-white p-4">
-              <div className="text-xs opacity-70">Total Profit (Filter)</div>
-              <div className="mt-1 text-2xl font-black" style={{ color: profitColor(summary.totalProfit) }}>
+            <Card title="Total Profit (Filter)" subtitle={`Record: ${summary.record}`}>
+              <div className="text-2xl font-black" style={{ color: profitColor(summary.totalProfit) }}>
                 {fmtMoney(summary.totalProfit)}
               </div>
-              <div className="mt-1 text-xs leading-snug opacity-70">Record: {summary.record}</div>
-            </div>
+            </Card>
 
-            {/* Total Bet */}
-            <div className="rounded-2xl border border-zinc-200 bg-white p-4">
-              <div className="text-xs opacity-70">Total Bet (Filter)</div>
-              <div className="mt-1 text-2xl font-black">{fmtMoney(summary.totalBet)}</div>
-            </div>
-
-            {/* ROI */}
-            <div className="rounded-2xl border border-zinc-200 bg-white p-4">
-              <div className="text-xs opacity-70">ROI (Filter)</div>
-              <div className="mt-1 text-2xl font-black" style={{ color: profitColor(summary.roi) }}>
+            <Card title="ROI (Filter)">
+              <div className="text-2xl font-black" style={{ color: profitColor(summary.roi) }}>
                 {summary.roi.toFixed(2)}%
               </div>
-            </div>
+            </Card>
 
-            {/* Unit Size */}
-            <div className="rounded-2xl border border-zinc-200 bg-white p-4">
-              <div className="text-xs opacity-70">Unit Size</div>
-              <div className="mt-1 text-2xl font-black">{fmtMoney(unitCard.unitSize)}</div>
-              <div className="mt-1 text-xs leading-snug opacity-70">
-                5% of {fmtMoney(unitCard.prevMonthEndingBankroll)}
-                <br />
-                Rounded down to nearest $50
-                <br />
-                Max cap: $10,000
-                <br />
-                As of {unitCard.prevMonthEndLabel}
+            <Card title="Total Bet (Filter)">
+              <div className="text-2xl font-black">{fmtMoney(summary.totalBet)}</div>
+            </Card>
+
+            <Card title="Tickets (Filter)">
+              <div className="text-2xl font-black">{fmtNumber(statusFilteredTickets.length)}</div>
+            </Card>
+
+            <Card title="Unit Size" subtitle={`As of ${unitCard.prevMonthEndLabel}`}>
+              <div className="text-2xl font-black">{fmtMoney(unitCard.unitSize)}</div>
+              <div className="mt-1 text-xs opacity-70">
+                5% of {fmtMoney(unitCard.prevMonthEndingBankroll)} (rounded down to $50)
               </div>
-            </div>
+            </Card>
           </div>
 
-          {/* Chart */}
           <div className="mt-5 rounded-2xl border border-zinc-200 bg-white p-4">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <div className="font-black">{chartTitle}</div>
-
-              <div className="grid grid-cols-2 gap-2 sm:flex sm:gap-2">
+            <div className="flex items-center justify-between gap-3">
+              <div className="font-black">{graphMode === "BANKROLL" ? "Bankroll" : "Profit (Range)"}</div>
+              <div className="flex gap-2">
                 <button
                   onClick={() => setGraphMode("BANKROLL")}
-                  className="h-11 rounded-xl border border-zinc-200 px-3 font-extrabold"
+                  className="h-10 rounded-xl border border-zinc-200 px-3 text-sm font-extrabold"
                   style={{
                     background: graphMode === "BANKROLL" ? "#111" : "white",
                     color: graphMode === "BANKROLL" ? "white" : "#111",
@@ -792,7 +777,7 @@ export default function DashboardPage() {
                 </button>
                 <button
                   onClick={() => setGraphMode("PROFIT")}
-                  className="h-11 rounded-xl border border-zinc-200 px-3 font-extrabold"
+                  className="h-10 rounded-xl border border-zinc-200 px-3 text-sm font-extrabold"
                   style={{
                     background: graphMode === "PROFIT" ? "#111" : "white",
                     color: graphMode === "PROFIT" ? "white" : "#111",
@@ -819,7 +804,6 @@ export default function DashboardPage() {
                     tick={{ fontSize: 12 }}
                     tickLine={false}
                     axisLine={false}
-                    // ✅ Bankroll graph should never dip below starting bankroll
                     domain={graphMode === "BANKROLL" ? [Number(startingBankroll) || 0, "auto"] : ["auto", "auto"]}
                     tickFormatter={(v) => fmtMoneyCompact(Number(v))}
                   />
@@ -833,7 +817,6 @@ export default function DashboardPage() {
                   ) : (
                     <>
                       <Area type="monotone" dataKey="profitInRange" fill="url(#chartFill)" stroke="none" />
-                      {/* ✅ Split line: green when >=0, red when <0 */}
                       <Line type="monotone" name="Profit" dataKey="profitPos" stroke="#0f7a2a" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} />
                       <Line type="monotone" name="Profit" dataKey="profitNeg" stroke="#b00020" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} />
                     </>
@@ -847,12 +830,12 @@ export default function DashboardPage() {
 
       {/* OPEN */}
       {tab === "OPEN" && (
-        <div className="mt-6">
-          <div className="flex items-end justify-between gap-3">
-            <h2 className="text-xl font-black">Open Tickets ({fmtNumber(openTickets.length)})</h2>
+        <div className="mt-5">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-xl font-black">Open Tickets ({fmtNumber(openTickets.length)})</div>
             <button
               onClick={loadTickets}
-              className="inline-flex h-11 items-center justify-center rounded-xl border border-zinc-200 bg-white px-4 font-bold"
+              className="inline-flex h-10 items-center justify-center rounded-xl border border-zinc-200 bg-white px-3 text-sm font-bold"
             >
               Refresh
             </button>
@@ -871,22 +854,18 @@ export default function DashboardPage() {
 
       {/* HISTORY */}
       {tab === "HISTORY" && (
-        <div className="mt-6">
-          <h2 className="text-xl font-black">
-            Tickets ({fmtNumber(statusFilteredTickets.length)})
-          </h2>
+        <div className="mt-5">
+          <div className="text-xl font-black">Tickets ({fmtNumber(statusFilteredTickets.length)})</div>
 
           {statusFilter === "ALL" ? (
             <>
               <div className="mt-3 mb-2 font-black">
-                Settled Tickets{" "}
-                <span className="font-bold opacity-60">({fmtNumber(settledTickets.length)})</span>
+                Settled <span className="font-bold opacity-60">({fmtNumber(settledTickets.length)})</span>
               </div>
               <TicketList tickets={settledTickets} mode="LINK" />
 
               <div className="mt-5 mb-2 font-black">
-                Open Tickets{" "}
-                <span className="font-bold opacity-60">({fmtNumber(openTickets.length)})</span>
+                Open <span className="font-bold opacity-60">({fmtNumber(openTickets.length)})</span>
               </div>
               <TicketList tickets={openTickets} mode="LINK" />
             </>
@@ -897,6 +876,64 @@ export default function DashboardPage() {
           )}
         </div>
       )}
+
+      {/* PERSONAL */}
+      {tab === "PERSONAL" && (
+        <div className="mt-5 grid gap-3 sm:grid-cols-2">
+          <Card title="Account Email">
+            <div className="text-lg font-black">{userEmail || "—"}</div>
+          </Card>
+
+          <Card title="Starting Bankroll">
+            {profileLoading ? (
+              <div className="text-sm opacity-70">Loading…</div>
+            ) : (
+              <>
+                <input
+                  type="number"
+                  value={startingBankroll}
+                  onChange={(e) => setStartingBankroll(Number(e.target.value))}
+                  className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
+                />
+                <button
+                  onClick={saveStartingBankroll}
+                  disabled={profileSaving}
+                  className="mt-2 inline-flex h-11 w-full items-center justify-center rounded-xl border border-zinc-200 bg-white font-bold disabled:opacity-60"
+                >
+                  {profileSaving ? "Saving…" : "Save"}
+                </button>
+              </>
+            )}
+          </Card>
+
+          <Card title="Unit Size" subtitle={`As of ${unitCard.prevMonthEndLabel}`}>
+            <div className="text-lg font-black">{fmtMoney(unitCard.unitSize)}</div>
+            <div className="mt-1 text-xs opacity-70">
+              Based on ending bankroll {fmtMoney(unitCard.prevMonthEndingBankroll)}
+            </div>
+          </Card>
+
+          <Card title="Betting Experience" subtitle={firstTicketDate ? `First ticket: ${yyyyMmDd(firstTicketDate)}` : "No tickets yet"}>
+            {experience ? (
+              <div className="text-lg font-black">
+                {experience.years}y {experience.months}m {experience.days}d
+              </div>
+            ) : (
+              <div className="text-sm opacity-70">Add your first ticket to start tracking experience.</div>
+            )}
+          </Card>
+        </div>
+      )}
+
+      {/* Bottom App Tabs */}
+      <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-zinc-200 bg-white/95 backdrop-blur">
+        <div className="mx-auto flex w-full max-w-6xl px-4 sm:px-6">
+          <BottomTabButton id="OVERVIEW" label="Overview" />
+          <BottomTabButton id="OPEN" label={`Open (${openTicketsAll.length})`} />
+          <BottomTabButton id="HISTORY" label="History" />
+          <BottomTabButton id="PERSONAL" label="Personal" />
+        </div>
+      </div>
     </div>
   );
 }
@@ -992,6 +1029,14 @@ function TicketList({
                 Void
               </button>
 
+              {/* ✅ View button */}
+              <Link
+                href={`/ticket/${t.id}`}
+                className="inline-flex h-10 items-center justify-center rounded-xl border border-zinc-200 bg-white px-3 text-sm font-extrabold"
+              >
+                View →
+              </Link>
+
               {quickUpdatingId === t.id && (
                 <span className="self-center text-xs font-bold opacity-70">Updating…</span>
               )}
@@ -1003,9 +1048,7 @@ function TicketList({
           <div className="text-xs opacity-70">Profit</div>
           <div
             className="text-lg font-black"
-            style={{
-              color: typeof t.profit === "number" ? profitColor(t.profit) : "#111",
-            }}
+            style={{ color: typeof t.profit === "number" ? profitColor(t.profit) : "#111" }}
           >
             {typeof t.profit === "number" ? fmtMoney(t.profit) : "—"}
           </div>
