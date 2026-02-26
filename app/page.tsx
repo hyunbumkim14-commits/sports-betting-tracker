@@ -79,10 +79,6 @@ function addDays(d: Date, days: number) {
   copy.setDate(copy.getDate() + days);
   return copy;
 }
-function toLocalMidnightIso(dateOnly: string) {
-  // dateOnly: YYYY-MM-DD
-  return new Date(dateOnly + "T00:00:00").toISOString();
-}
 function round2(n: number) {
   return Math.round(n * 100) / 100;
 }
@@ -95,17 +91,6 @@ function computeUnitSize(prevMonthEndingBankroll: number) {
   const nonNegative = Math.max(0, roundedDown);
   return Math.min(10_000, nonNegative);
 }
-function localDateKeyFromIso(iso: string) {
-  const d = new Date(iso); // interpreted in LOCAL timezone
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`; // LOCAL YYYY-MM-DD
-}
-
-function ticketDateForGrouping(t: Ticket) {
-  return localDateKeyFromIso(t.placed_at);
-}
 function fmtNumber(n: number) {
   return new Intl.NumberFormat("en-US").format(n);
 }
@@ -116,7 +101,6 @@ function fmtMoney(n: number) {
   }).format(n);
 }
 function fmtMoney0(n: number) {
-  // whole dollars (calendar)
   return new Intl.NumberFormat("en-US", {
     minimumFractionDigits: 0,
     maximumFractionDigits: 0,
@@ -134,12 +118,41 @@ function profitColor(n: number) {
   return "#111";
 }
 function profitFill(n: number) {
-  // lighter than text color
-  if (n > 0) return "#dcfce7"; // light green
-  if (n < 0) return "#fee2e2"; // light red
+  if (n > 0) return "#dcfce7";
+  if (n < 0) return "#fee2e2";
   return "#ffffff";
 }
-// Accurate-ish Y/M/D diff (calendar-aware)
+function monthLabel(d: Date) {
+  return d.toLocaleString("en-US", { month: "long", year: "numeric" });
+}
+function buildCalendarGrid(monthDate: Date) {
+  const first = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1);
+  const last = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0);
+  const startWeekday = first.getDay(); // 0 Sun .. 6 Sat
+  const daysInMonth = last.getDate();
+
+  const cells: Array<{ date: Date | null }> = [];
+  for (let i = 0; i < startWeekday; i++) cells.push({ date: null });
+  for (let day = 1; day <= daysInMonth; day++) {
+    cells.push({ date: new Date(monthDate.getFullYear(), monthDate.getMonth(), day) });
+  }
+  while (cells.length % 7 !== 0) cells.push({ date: null });
+  return cells;
+}
+
+// ✅ LOCAL YYYY-MM-DD key for any ISO timestamptz
+function localDateKeyFromIso(iso: string) {
+  const d = new Date(iso); // local interpretation for getFullYear/getMonth/getDate
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+function ticketDateForGrouping(t: Ticket) {
+  return localDateKeyFromIso(t.placed_at);
+}
+
+// Accurate-ish Y/M/D diff
 function diffYMD(from: Date, to: Date) {
   let start = new Date(from.getFullYear(), from.getMonth(), from.getDate());
   let end = new Date(to.getFullYear(), to.getMonth(), to.getDate());
@@ -204,38 +217,6 @@ function Card({
   );
 }
 
-function Pill({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="inline-flex h-10 items-center justify-center rounded-xl border border-zinc-200 px-3 text-sm font-extrabold"
-      style={{ background: active ? "#111" : "white", color: active ? "white" : "#111" }}
-    >
-      {label}
-    </button>
-  );
-}
-
-function monthLabel(d: Date) {
-  return d.toLocaleString("en-US", { month: "long", year: "numeric" });
-}
-
-function buildCalendarGrid(monthDate: Date) {
-  const first = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1);
-  const last = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0);
-  const startWeekday = first.getDay(); // 0 Sun .. 6 Sat
-  const daysInMonth = last.getDate();
-
-  const cells: Array<{ date: Date | null }> = [];
-  for (let i = 0; i < startWeekday; i++) cells.push({ date: null });
-  for (let day = 1; day <= daysInMonth; day++) {
-    cells.push({ date: new Date(monthDate.getFullYear(), monthDate.getMonth(), day) });
-  }
-  while (cells.length % 7 !== 0) cells.push({ date: null });
-  return cells;
-}
-
 function TicketLines({ legs }: { legs: Leg[] }) {
   if (!legs?.length) return null;
   const top = legs.slice(0, 3);
@@ -247,9 +228,7 @@ function TicketLines({ legs }: { legs: Leg[] }) {
       <ul className="mt-1 space-y-1">
         {top.map((l) => (
           <li key={l.id} className="flex items-center justify-between gap-3">
-            <span className="truncate">
-              {(l.selection ?? "—").trim() || "—"}
-            </span>
+            <span className="truncate">{(l.selection ?? "—").trim() || "—"}</span>
             <span className="shrink-0 font-extrabold tabular-nums">
               {Number.isFinite(l.american_odds)
                 ? l.american_odds > 0
@@ -268,17 +247,15 @@ function TicketLines({ legs }: { legs: Leg[] }) {
 function TicketCardInner({
   t,
   legs,
-  mode,
   quickUpdatingId,
   onQuickSettle,
 }: {
   t: Ticket;
   legs: Leg[];
-  mode: "LINK" | "PLAIN";
   quickUpdatingId: string | null;
   onQuickSettle?: (t: Ticket, status: Ticket["status"]) => void;
 }) {
-  const body = (
+  return (
     <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
@@ -290,10 +267,9 @@ function TicketCardInner({
             <span className="font-bold">{t.book ?? "—"}</span>
           </div>
         </div>
-
-        {mode === "LINK" ? (
-          <div className="shrink-0 text-xs font-extrabold text-zinc-900">View →</div>
-        ) : null}
+        <Link href={`/ticket/${t.id}`} className="shrink-0 text-xs font-extrabold text-zinc-900">
+          View →
+        </Link>
       </div>
 
       <div className="mt-3 grid grid-cols-3 gap-3">
@@ -318,16 +294,12 @@ function TicketCardInner({
 
       <TicketLines legs={legs} />
 
-      {mode === "PLAIN" && t.status === "open" ? (
+      {t.status === "open" ? (
         <div className="mt-3 grid grid-cols-4 gap-2">
           <button
             type="button"
             disabled={quickUpdatingId === t.id}
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              onQuickSettle?.(t, "won");
-            }}
+            onClick={() => onQuickSettle?.(t, "won")}
             className="h-10 rounded-xl bg-green-600 px-3 text-sm font-extrabold text-white disabled:opacity-60"
           >
             ✔ Win
@@ -335,11 +307,7 @@ function TicketCardInner({
           <button
             type="button"
             disabled={quickUpdatingId === t.id}
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              onQuickSettle?.(t, "lost");
-            }}
+            onClick={() => onQuickSettle?.(t, "lost")}
             className="h-10 rounded-xl bg-red-600 px-3 text-sm font-extrabold text-white disabled:opacity-60"
           >
             ✖ Loss
@@ -347,11 +315,7 @@ function TicketCardInner({
           <button
             type="button"
             disabled={quickUpdatingId === t.id}
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              onQuickSettle?.(t, "push");
-            }}
+            onClick={() => onQuickSettle?.(t, "push")}
             className="h-10 rounded-xl border border-zinc-200 bg-white px-3 text-sm font-extrabold disabled:opacity-60"
           >
             Push
@@ -359,11 +323,7 @@ function TicketCardInner({
           <button
             type="button"
             disabled={quickUpdatingId === t.id}
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              onQuickSettle?.(t, "void");
-            }}
+            onClick={() => onQuickSettle?.(t, "void")}
             className="h-10 rounded-xl border border-zinc-200 bg-white px-3 text-sm font-extrabold disabled:opacity-60"
           >
             Void
@@ -377,27 +337,16 @@ function TicketCardInner({
       ) : null}
     </div>
   );
-
-  if (mode === "LINK") {
-    return (
-      <Link href={`/ticket/${t.id}`} className="block">
-        {body}
-      </Link>
-    );
-  }
-  return body;
 }
 
 function TicketList({
   tickets,
   legsByTicket,
-  mode,
   quickUpdatingId,
   onQuickSettle,
 }: {
   tickets: Ticket[];
   legsByTicket: Record<string, Leg[]>;
-  mode: "LINK" | "PLAIN";
   quickUpdatingId: string | null;
   onQuickSettle?: (t: Ticket, status: Ticket["status"]) => void;
 }) {
@@ -413,7 +362,6 @@ function TicketList({
           key={t.id}
           t={t}
           legs={legsByTicket[t.id] ?? []}
-          mode={mode}
           quickUpdatingId={quickUpdatingId}
           onQuickSettle={onQuickSettle}
         />
@@ -438,14 +386,15 @@ export default function DashboardPage() {
 
   const [leagueFilter, setLeagueFilter] = useState<"ALL" | (typeof LEAGUE_OPTIONS)[number]>("ALL");
 
-  // ✅ date range pills (default MTD)
+  // date range pills (default MTD)
   const [preset, setPreset] = useState<DatePreset>("MTD");
   const [customStart, setCustomStart] = useState(() => yyyyMmDd(addDays(new Date(), -29)));
   const [customEnd, setCustomEnd] = useState(() => yyyyMmDd(new Date()));
 
-  // ✅ profit graph first (default)
+  // graph
   const [graphMode, setGraphMode] = useState<GraphMode>("PROFIT");
 
+  // ✅ only bottom tabs (no top tab row)
   const [tab, setTab] = useState<DashboardTab>("OVERVIEW");
   const [quickUpdatingId, setQuickUpdatingId] = useState<string | null>(null);
 
@@ -581,33 +530,42 @@ export default function DashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authChecked]);
 
+  // ✅ Optimistic update so metrics update immediately
   async function quickSettle(t: Ticket, status: Ticket["status"]) {
     setQuickUpdatingId(t.id);
 
     let profit: number | null = t.profit ?? null;
     let payout: number | null = t.payout ?? null;
 
-    // Minimal auto-profit if missing (keeps your existing behavior stable):
-    // - won: payout must exist to compute profit, otherwise keep existing profit
+    // Minimal auto-profit defaults (keeps your existing behavior stable):
     // - lost: profit = -stake
     // - push/void: profit = 0
+    // - won: keep existing profit unless you already store it elsewhere
     if (status === "lost") profit = -Number(t.stake || 0);
     if (status === "push" || status === "void") profit = 0;
 
-    const patch: any = {
+    const patch: Partial<Ticket> = {
       status,
       profit,
       payout,
       settled_at: new Date().toISOString(),
     };
 
+    // optimistic local state update (instant UI + metrics refresh)
+    setTickets((prev) => prev.map((x) => (x.id === t.id ? ({ ...x, ...patch } as Ticket) : x)));
+
     const { error } = await supabase.from("tickets").update(patch).eq("id", t.id);
+
     setQuickUpdatingId(null);
 
     if (error) {
+      // revert by reloading authoritative data
+      await loadTicketsAndLegs();
       alert(error.message);
       return;
     }
+
+    // keep data perfectly in sync (also clears any edge cases)
     await loadTicketsAndLegs();
   }
 
@@ -617,30 +575,29 @@ export default function DashboardPage() {
     const today = yyyyMmDd(now);
 
     if (preset === "ALL") return { start: null as string | null, end: null as string | null };
-
     if (preset === "CUSTOM") return { start: customStart, end: customEnd };
-
     if (preset === "7D") return { start: yyyyMmDd(addDays(now, -6)), end: today };
-
     if (preset === "30D") return { start: yyyyMmDd(addDays(now, -29)), end: today };
-
     if (preset === "MTD") return { start: yyyyMmDd(startOfMonth(now)), end: today };
 
-    // LAST_MONTH
     const lastMonthEnd = lastDayOfPreviousMonth(now);
     const lastMonthStart = startOfMonth(lastMonthEnd);
     return { start: yyyyMmDd(lastMonthStart), end: yyyyMmDd(lastMonthEnd) };
   }, [preset, customStart, customEnd]);
 
+  // ✅ Use local day keys for range filtering to avoid timezone boundary bugs
   const ticketsFiltered = useMemo(() => {
     let out = tickets;
 
     if (leagueFilter !== "ALL") out = out.filter((t) => t.league === leagueFilter);
 
     if (range.start && range.end) {
-      const startIso = toLocalMidnightIso(range.start);
-      const endExclusiveIso = toLocalMidnightIso(yyyyMmDd(addDays(new Date(range.end + "T00:00:00"), 1)));
-      out = out.filter((t) => t.placed_at >= startIso && t.placed_at < endExclusiveIso);
+      const start = range.start;
+      const end = range.end;
+      out = out.filter((t) => {
+        const k = localDateKeyFromIso(t.placed_at);
+        return k >= start && k <= end; // local YYYY-MM-DD comparison
+      });
     }
 
     return out;
@@ -686,7 +643,6 @@ export default function DashboardPage() {
   }, [settledTicketsInRange]);
 
   const currentBankroll = useMemo(() => {
-    // Starting bankroll + all-time profit on settled tickets
     let allTimeProfit = 0;
     for (const t of tickets) {
       if (t.status === "open") continue;
@@ -716,7 +672,6 @@ export default function DashboardPage() {
 
   // ---------- Calendar derived data ----------
   const calendarMonthStart = useMemo(() => startOfMonth(calendarMonth), [calendarMonth]);
-  const calendarMonthEnd = useMemo(() => endOfMonth(calendarMonth), [calendarMonth]);
 
   const ticketsInCalendarMonth = useMemo(() => {
     const ym = `${calendarMonthStart.getFullYear()}-${String(calendarMonthStart.getMonth() + 1).padStart(2, "0")}`;
@@ -738,17 +693,18 @@ export default function DashboardPage() {
     return tickets.filter((t) => localDateKeyFromIso(t.placed_at) === selectedDay);
   }, [tickets, selectedDay]);
 
-  // ---------- Personal (Unit size + experience) ----------
+  // ---------- Personal ----------
   const unitCard = useMemo(() => {
     const now = new Date();
     const prevEnd = lastDayOfPreviousMonth(now);
     const prevEndDay = yyyyMmDd(prevEnd);
-    const prevEndIsoExclusive = toLocalMidnightIso(yyyyMmDd(addDays(prevEnd, 1)));
 
     let profitThroughPrevEnd = 0;
+    const prevEndKey = prevEndDay;
     for (const t of tickets) {
       if (t.status === "open") continue;
-      if (t.placed_at >= prevEndIsoExclusive) continue;
+      const k = localDateKeyFromIso(t.placed_at);
+      if (k > prevEndKey) continue;
       const p = typeof t.profit === "number" && Number.isFinite(t.profit) ? t.profit : 0;
       profitThroughPrevEnd += p;
     }
@@ -824,84 +780,121 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="mt-4 grid grid-cols-4 gap-2">
-        <Pill active={tab === "OVERVIEW"} label="Overview" onClick={() => setTab("OVERVIEW")} />
-        <Pill active={tab === "OPEN"} label="Open" onClick={() => setTab("OPEN")} />
-        <Pill active={tab === "CALENDAR"} label="Calendar" onClick={() => setTab("CALENDAR")} />
-        <Pill active={tab === "PERSONAL"} label="Personal" onClick={() => setTab("PERSONAL")} />
-      </div>
-
-      {/* Filters (OVERVIEW only) */}
-      {tab === "OVERVIEW" ? (
-        <div className="mt-4 space-y-3 rounded-2xl border border-zinc-200 bg-white p-4">
-          <div className="grid grid-cols-3 gap-2">
-            <Pill active={preset === "MTD"} label="MTD" onClick={() => setPreset("MTD")} />
-            <Pill active={preset === "7D"} label="7D" onClick={() => setPreset("7D")} />
-            <Pill active={preset === "30D"} label="30D" onClick={() => setPreset("30D")} />
-          </div>
-
-          <div className="grid grid-cols-3 gap-2">
-            <Pill active={preset === "LAST_MONTH"} label="Last month" onClick={() => setPreset("LAST_MONTH")} />
-            <Pill active={preset === "ALL"} label="All time" onClick={() => setPreset("ALL")} />
-            <Pill active={preset === "CUSTOM"} label="Custom" onClick={() => setPreset("CUSTOM")} />
-          </div>
-
-          {preset === "CUSTOM" ? (
-            <div className="grid grid-cols-2 gap-2">
-              <input
-                type="date"
-                value={customStart}
-                onChange={(e) => setCustomStart(e.target.value)}
-                className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-sm font-bold"
-              />
-              <input
-                type="date"
-                value={customEnd}
-                onChange={(e) => setCustomEnd(e.target.value)}
-                className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-sm font-bold"
-              />
-            </div>
-          ) : null}
-
-          <div className="grid grid-cols-[1fr_auto] gap-2">
-            <select
-              value={leagueFilter}
-              onChange={(e) => setLeagueFilter(e.target.value as any)}
-              className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-sm font-bold"
-            >
-              <option value="ALL">All Leagues</option>
-              {LEAGUE_OPTIONS.map((l) => (
-                <option key={l} value={l}>
-                  {l}
-                </option>
-              ))}
-            </select>
-
-            <button
-              type="button"
-              onClick={() => loadTicketsAndLegs()}
-              className="inline-flex h-11 shrink-0 items-center justify-center rounded-xl border border-zinc-200 bg-white px-4 text-sm font-extrabold"
-            >
-              Refresh
-            </button>
-          </div>
-        </div>
-      ) : null}
-
-      {/* OVERVIEW */}
+      {/* OVERVIEW (clean: metrics + graph only) */}
       {tab === "OVERVIEW" ? (
         <div className="mt-4 space-y-4">
+          <div className="space-y-3 rounded-2xl border border-zinc-200 bg-white p-4">
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={() => setPreset("MTD")}
+                className="h-10 rounded-xl border border-zinc-200 text-sm font-extrabold"
+                style={{ background: preset === "MTD" ? "#111" : "white", color: preset === "MTD" ? "white" : "#111" }}
+              >
+                MTD
+              </button>
+              <button
+                type="button"
+                onClick={() => setPreset("7D")}
+                className="h-10 rounded-xl border border-zinc-200 text-sm font-extrabold"
+                style={{ background: preset === "7D" ? "#111" : "white", color: preset === "7D" ? "white" : "#111" }}
+              >
+                7D
+              </button>
+              <button
+                type="button"
+                onClick={() => setPreset("30D")}
+                className="h-10 rounded-xl border border-zinc-200 text-sm font-extrabold"
+                style={{
+                  background: preset === "30D" ? "#111" : "white",
+                  color: preset === "30D" ? "white" : "#111",
+                }}
+              >
+                30D
+              </button>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={() => setPreset("LAST_MONTH")}
+                className="h-10 rounded-xl border border-zinc-200 text-sm font-extrabold"
+                style={{
+                  background: preset === "LAST_MONTH" ? "#111" : "white",
+                  color: preset === "LAST_MONTH" ? "white" : "#111",
+                }}
+              >
+                Last month
+              </button>
+              <button
+                type="button"
+                onClick={() => setPreset("ALL")}
+                className="h-10 rounded-xl border border-zinc-200 text-sm font-extrabold"
+                style={{ background: preset === "ALL" ? "#111" : "white", color: preset === "ALL" ? "white" : "#111" }}
+              >
+                All time
+              </button>
+              <button
+                type="button"
+                onClick={() => setPreset("CUSTOM")}
+                className="h-10 rounded-xl border border-zinc-200 text-sm font-extrabold"
+                style={{
+                  background: preset === "CUSTOM" ? "#111" : "white",
+                  color: preset === "CUSTOM" ? "white" : "#111",
+                }}
+              >
+                Custom
+              </button>
+            </div>
+
+            {preset === "CUSTOM" ? (
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  type="date"
+                  value={customStart}
+                  onChange={(e) => setCustomStart(e.target.value)}
+                  className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-sm font-bold"
+                />
+                <input
+                  type="date"
+                  value={customEnd}
+                  onChange={(e) => setCustomEnd(e.target.value)}
+                  className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-sm font-bold"
+                />
+              </div>
+            ) : null}
+
+            <div className="grid grid-cols-[1fr_auto] gap-2">
+              <select
+                value={leagueFilter}
+                onChange={(e) => setLeagueFilter(e.target.value as any)}
+                className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-sm font-bold"
+              >
+                <option value="ALL">All Leagues</option>
+                {LEAGUE_OPTIONS.map((l) => (
+                  <option key={l} value={l}>
+                    {l}
+                  </option>
+                ))}
+              </select>
+
+              <button
+                type="button"
+                onClick={() => loadTicketsAndLegs()}
+                className="inline-flex h-11 shrink-0 items-center justify-center rounded-xl border border-zinc-200 bg-white px-4 text-sm font-extrabold"
+              >
+                Refresh
+              </button>
+            </div>
+          </div>
+
           <div className="grid grid-cols-2 gap-3">
             <Card title="Current bankroll" subtitle="Starting bankroll + all-time profit">
               <div className="text-2xl font-black tabular-nums">${fmtMoney(currentBankroll)}</div>
             </Card>
 
             <Card title="Profit (range)" subtitle="Settled tickets only">
-              <div
-                className="text-2xl font-black tabular-nums"
-                style={{ color: profitColor(summary.totalProfit) }}
-              >
+              <div className="text-2xl font-black tabular-nums" style={{ color: profitColor(summary.totalProfit) }}>
                 ${fmtMoney(summary.totalProfit)}
               </div>
               <div className="mt-1 text-xs font-bold text-zinc-500">{summary.roi.toFixed(2)}% ROI</div>
@@ -969,15 +962,6 @@ export default function DashboardPage() {
               </ResponsiveContainer>
             </div>
           </Card>
-
-          <Card title="Tickets (range)">
-            <TicketList
-              tickets={ticketsFiltered}
-              legsByTicket={legsByTicket}
-              mode="LINK"
-              quickUpdatingId={quickUpdatingId}
-            />
-          </Card>
         </div>
       ) : null}
 
@@ -998,7 +982,6 @@ export default function DashboardPage() {
           <TicketList
             tickets={openTicketsAll}
             legsByTicket={legsByTicket}
-            mode="PLAIN"
             quickUpdatingId={quickUpdatingId}
             onQuickSettle={quickSettle}
           />
@@ -1023,7 +1006,6 @@ export default function DashboardPage() {
               ←
             </button>
 
-            {/* ✅ Clickable month/year (mobile-friendly jump) */}
             <button
               type="button"
               onClick={() => monthPickerRef.current?.click()}
@@ -1079,7 +1061,7 @@ export default function DashboardPage() {
               const key = yyyyMmDd(cell.date);
               const totalRaw = dayTotals.get(key) ?? 0;
 
-              // ✅ Round to nearest whole dollar for calendar display
+              // rounded whole dollars for calendar display
               const totalRounded = Math.round(totalRaw);
 
               const isSelected = selectedDay === key;
@@ -1101,9 +1083,9 @@ export default function DashboardPage() {
                   <div className="flex h-full flex-col justify-between">
                     <div className="text-xs font-extrabold text-zinc-900">{cell.date.getDate()}</div>
 
-                    {/* ✅ Prevent bleed: single-line, truncated, tabular nums */}
+                    {/* ✅ show FULL number (no ellipsis). smaller font, allow wrap */}
                     <div
-                      className="max-w-full overflow-hidden text-ellipsis whitespace-nowrap text-xs font-black leading-none tabular-nums"
+                      className="whitespace-normal break-words text-[10px] font-black leading-tight tabular-nums"
                       style={{ color: fg }}
                       title={totalRounded === 0 ? "" : `$${fmtMoney0(totalRounded)}`}
                     >
@@ -1127,12 +1109,41 @@ export default function DashboardPage() {
                 </button>
               </div>
 
-              <TicketList
-                tickets={ticketsForSelectedDay}
-                legsByTicket={legsByTicket}
-                mode="LINK"
-                quickUpdatingId={quickUpdatingId}
-              />
+              <div className="space-y-3">
+                {ticketsForSelectedDay.length === 0 ? (
+                  <div className="rounded-2xl border border-zinc-200 bg-white p-6 text-center text-sm font-bold text-zinc-500">
+                    No tickets.
+                  </div>
+                ) : null}
+
+                {ticketsForSelectedDay.map((t) => (
+                  <Link key={t.id} href={`/ticket/${t.id}`} className="block">
+                    <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-extrabold">
+                            {t.league ?? "—"} • {t.ticket_type.toUpperCase()}
+                          </div>
+                          <div className="mt-1 text-xs text-zinc-600">
+                            Book: <span className="font-bold">{t.book ?? "—"}</span> • Status:{" "}
+                            <span className="font-bold">{t.status.toUpperCase()}</span>
+                          </div>
+                        </div>
+                        <div
+                          className="shrink-0 text-sm font-black tabular-nums"
+                          style={{
+                            color: profitColor(typeof t.profit === "number" ? t.profit : 0),
+                          }}
+                        >
+                          {typeof t.profit === "number" ? `$${fmtMoney(t.profit)}` : "—"}
+                        </div>
+                      </div>
+
+                      <TicketLines legs={legsByTicket[t.id] ?? []} />
+                    </div>
+                  </Link>
+                ))}
+              </div>
             </Card>
           ) : null}
         </div>
@@ -1193,7 +1204,7 @@ export default function DashboardPage() {
         </div>
       ) : null}
 
-      {/* Bottom App Tabs (optional) */}
+      {/* ✅ Bottom-only tabs */}
       <div className="fixed bottom-0 left-0 right-0 border-t border-zinc-200 bg-white">
         <div className="mx-auto grid max-w-3xl grid-cols-4 gap-2 p-3">
           <button
