@@ -1,3 +1,8 @@
+/* =========================================================
+   PASTE THIS FILE AT:
+   /app/page.tsx   (your Dashboard)
+   ========================================================= */
+
 "use client";
 
 import Link from "next/link";
@@ -28,6 +33,13 @@ type Ticket = {
   league: string | null;
 };
 
+type Leg = {
+  id: string;
+  ticket_id: string;
+  american_odds: number;
+  status: "open" | "won" | "lost" | "push" | "void";
+};
+
 const LEAGUE_OPTIONS = [
   "NBA",
   "NHL",
@@ -45,6 +57,7 @@ const LEAGUE_OPTIONS = [
 type DatePreset = "7D" | "30D" | "MTD" | "LAST_MONTH" | "ALL" | "CUSTOM";
 type GraphMode = "BANKROLL" | "PROFIT";
 type StatusFilter = "ALL" | Ticket["status"];
+type DashboardTab = "OVERVIEW" | "OPEN" | "HISTORY";
 
 function pad2(n: number) {
   return String(n).padStart(2, "0");
@@ -66,24 +79,6 @@ function addDays(d: Date, days: number) {
 function toLocalMidnightIso(dateOnly: string) {
   return new Date(dateOnly + "T00:00:00").toISOString();
 }
-function fmtMoney(n: number) {
-  return n.toFixed(2);
-}
-function fmtMoneyCompact(n: number) {
-  const abs = Math.abs(n);
-  if (abs >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (abs >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return n.toFixed(0);
-}
-function profitColor(n: number) {
-  if (n > 0) return "#0f7a2a";
-  if (n < 0) return "#b00020";
-  return "#111";
-}
-function ticketDateForGrouping(t: Ticket) {
-  const d = new Date(t.placed_at);
-  return yyyyMmDd(new Date(d.getFullYear(), d.getMonth(), d.getDate()));
-}
 function round2(n: number) {
   return Math.round(n * 100) / 100;
 }
@@ -96,17 +91,51 @@ function computeUnitSize(prevMonthEndingBankroll: number) {
   const nonNegative = Math.max(0, roundedDown);
   return Math.min(10_000, nonNegative);
 }
+function ticketDateForGrouping(t: Ticket) {
+  const d = new Date(t.placed_at);
+  return yyyyMmDd(new Date(d.getFullYear(), d.getMonth(), d.getDate()));
+}
+
+function americanToDecimal(american: number): number {
+  if (!Number.isFinite(american) || american === 0) throw new Error("Invalid American odds");
+  if (american > 0) return 1 + american / 100;
+  return 1 + 100 / Math.abs(american);
+}
+
+function fmtNumber(n: number) {
+  return new Intl.NumberFormat("en-US").format(n);
+}
+function fmtMoney(n: number) {
+  return new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(n);
+}
+function fmtMoneyCompact(n: number) {
+  const abs = Math.abs(n);
+  if (abs >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (abs >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return n.toFixed(0);
+}
+function profitColor(n: number) {
+  if (n > 0) return "#0f7a2a";
+  if (n < 0) return "#b00020";
+  return "#111";
+}
 
 function CustomTooltip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
-  const p = payload[0];
-  const value = typeof p?.value === "number" ? p.value : null;
+
+  // pick first non-null value so tooltips work with split lines (pos/neg)
+  const first = payload.find((p: any) => typeof p?.value === "number");
+  const name = first?.name ?? "Value";
+  const value = typeof first?.value === "number" ? first.value : null;
 
   return (
     <div className="rounded-xl border border-zinc-200 bg-white/95 px-3 py-2 text-xs shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
       <div className="mb-1 font-black">{label}</div>
       <div className="flex items-center justify-between gap-3">
-        <span className="opacity-70">{p?.name}</span>
+        <span className="opacity-70">{name}</span>
         <span className="font-black">{value === null ? "—" : fmtMoney(value)}</span>
       </div>
     </div>
@@ -134,6 +163,9 @@ export default function DashboardPage() {
 
   const [graphMode, setGraphMode] = useState<GraphMode>("BANKROLL");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
+
+  const [tab, setTab] = useState<DashboardTab>("OVERVIEW");
+  const [quickUpdatingId, setQuickUpdatingId] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -223,37 +255,39 @@ export default function DashboardPage() {
     if (error) alert(error.message);
   }
 
-  useEffect(() => {
-    if (!authChecked) return;
+  async function loadTickets() {
+    setLoading(true);
 
-    async function load() {
-      setLoading(true);
+    const { data, error } = await supabase
+      .from("tickets")
+      .select(
+        "id, ticket_type, stake, status, book, payout, profit, placed_at, settled_at, league"
+      )
+      .order("placed_at", { ascending: false });
 
-      const { data, error } = await supabase
-        .from("tickets")
-        .select(
-          "id, ticket_type, stake, status, book, payout, profit, placed_at, settled_at, league"
-        )
-        .order("placed_at", { ascending: false });
-
-      if (error) {
-        console.error(error);
-        alert(error.message);
-        setLoading(false);
-        return;
-      }
-
-      setTickets((data ?? []) as Ticket[]);
+    if (error) {
+      console.error(error);
+      alert(error.message);
       setLoading(false);
+      return;
     }
 
-    load();
+    setTickets((data ?? []) as Ticket[]);
+    setLoading(false);
+  }
+
+  useEffect(() => {
+    if (!authChecked) return;
+    loadTickets();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authChecked]);
 
   const { rangeStart, rangeEndInclusive } = useMemo(() => {
     const now = new Date();
-    if (preset === "ALL") return { rangeStart: null as string | null, rangeEndInclusive: null as string | null };
-    if (preset === "CUSTOM") return { rangeStart: customStart || null, rangeEndInclusive: customEnd || null };
+    if (preset === "ALL")
+      return { rangeStart: null as string | null, rangeEndInclusive: null as string | null };
+    if (preset === "CUSTOM")
+      return { rangeStart: customStart || null, rangeEndInclusive: customEnd || null };
     if (preset === "7D") return { rangeStart: yyyyMmDd(addDays(now, -6)), rangeEndInclusive: yyyyMmDd(now) };
     if (preset === "30D") return { rangeStart: yyyyMmDd(addDays(now, -29)), rangeEndInclusive: yyyyMmDd(now) };
     if (preset === "MTD") return { rangeStart: yyyyMmDd(startOfMonth(now)), rangeEndInclusive: yyyyMmDd(now) };
@@ -271,14 +305,11 @@ export default function DashboardPage() {
     const startIso = rangeStart ? toLocalMidnightIso(rangeStart) : null;
 
     const endExclusiveIso = rangeEndInclusive
-      ? toLocalMidnightIso(
-          yyyyMmDd(addDays(new Date(rangeEndInclusive + "T00:00:00"), 1))
-        )
+      ? toLocalMidnightIso(yyyyMmDd(addDays(new Date(rangeEndInclusive + "T00:00:00"), 1)))
       : null;
 
     return tickets.filter((t) => {
-      const passLeague =
-        leagueFilter === "ALL" ? true : (t.league ?? "") === leagueFilter;
+      const passLeague = leagueFilter === "ALL" ? true : (t.league ?? "") === leagueFilter;
       const baseIso = t.placed_at;
       const passStart = !startIso ? true : baseIso >= startIso;
       const passEnd = !endExclusiveIso ? true : baseIso < endExclusiveIso;
@@ -352,9 +383,7 @@ export default function DashboardPage() {
       return acc;
     }, 0);
 
-    const prevMonthEndingBankroll = round2(
-      (Number(startingBankroll) || 0) + realizedProfitUpToPrevMonthEnd
-    );
+    const prevMonthEndingBankroll = round2((Number(startingBankroll) || 0) + realizedProfitUpToPrevMonthEnd);
     const unitSize = computeUnitSize(prevMonthEndingBankroll);
 
     return {
@@ -365,62 +394,189 @@ export default function DashboardPage() {
   }, [tickets, startingBankroll]);
 
   const chartData = useMemo(() => {
-  const startIso = rangeStart ? toLocalMidnightIso(rangeStart) : null;
+    const startIso = rangeStart ? toLocalMidnightIso(rangeStart) : null;
 
-  // bankroll baseline includes profit BEFORE the selected range
-  const profitBeforeRange = tickets.reduce((acc, t) => {
-    const passLeague =
-      leagueFilter === "ALL" ? true : (t.league ?? "") === leagueFilter;
-    if (!passLeague) return acc;
+    // bankroll baseline includes profit BEFORE the selected range
+    const profitBeforeRange = tickets.reduce((acc, t) => {
+      const passLeague = leagueFilter === "ALL" ? true : (t.league ?? "") === leagueFilter;
+      if (!passLeague) return acc;
 
-    if (startIso && t.placed_at < startIso) {
-      if (typeof t.profit === "number" && Number.isFinite(t.profit)) return acc + t.profit;
+      if (startIso && t.placed_at < startIso) {
+        if (typeof t.profit === "number" && Number.isFinite(t.profit)) return acc + t.profit;
+      }
+      return acc;
+    }, 0);
+
+    const baselineBankroll = round2((Number(startingBankroll) || 0) + profitBeforeRange);
+
+    // day -> sum profit for tickets IN the selected range
+    const map = new Map<string, number>();
+    for (const t of filteredTickets) {
+      const day = ticketDateForGrouping(t);
+      const p = typeof t.profit === "number" && Number.isFinite(t.profit) ? t.profit : 0;
+      map.set(day, (map.get(day) ?? 0) + p);
     }
-    return acc;
-  }, 0);
 
-  const baselineBankroll = round2((Number(startingBankroll) || 0) + profitBeforeRange);
+    const days = Array.from(map.keys()).sort();
+    let runningBankroll = baselineBankroll;
+    let profitInRange = 0;
 
-  // day -> sum profit for tickets IN the selected range (filteredTickets already obeys date range)
-  const map = new Map<string, number>();
-  for (const t of filteredTickets) {
-    const day = ticketDateForGrouping(t);
-    const p = typeof t.profit === "number" && Number.isFinite(t.profit) ? t.profit : 0;
-    map.set(day, (map.get(day) ?? 0) + p);
-  }
+    return days.map((d) => {
+      const dayProfit = map.get(d) ?? 0;
+      runningBankroll += dayProfit;
+      profitInRange += dayProfit;
 
-  const days = Array.from(map.keys()).sort();
-  let runningBankroll = baselineBankroll;
+      const p = round2(profitInRange);
 
-  // ✅ Profit resets to 0 at the selected range start
-  let profitInRange = 0;
-
-  return days.map((d) => {
-    const dayProfit = map.get(d) ?? 0;
-
-    runningBankroll += dayProfit;
-    profitInRange += dayProfit;
-
-    return {
-      date: d,
-      bankroll: round2(runningBankroll),
-      profitInRange: round2(profitInRange),
-    };
-  });
+      return {
+        date: d,
+        bankroll: round2(runningBankroll),
+        profitInRange: p,
+        // split series (so line flips red/green at 0)
+        profitPos: p >= 0 ? p : null,
+        profitNeg: p < 0 ? p : null,
+      };
+    });
   }, [filteredTickets, tickets, startingBankroll, leagueFilter, rangeStart]);
 
   const chartTitle = graphMode === "BANKROLL" ? "Bankroll" : "Profit (Range)";
-  const chartKey = graphMode === "BANKROLL" ? "bankroll" : "profitInRange";
 
+  const openTicketsAll = useMemo(() => tickets.filter((t) => t.status === "open"), [tickets]);
   const openTickets = useMemo(
     () => statusFilteredTickets.filter((t) => t.status === "open"),
     [statusFilteredTickets]
   );
-
   const settledTickets = useMemo(
     () => statusFilteredTickets.filter((t) => t.status !== "open"),
     [statusFilteredTickets]
   );
+
+  async function quickSettleTicket(ticket: Ticket, nextStatus: Ticket["status"]) {
+    if (quickUpdatingId) return;
+
+    setQuickUpdatingId(ticket.id);
+
+    try {
+      // pull legs so we can compute payout/profit for quick Win/Loss
+      const { data: legs, error: legsErr } = await supabase
+        .from("legs")
+        .select("id, ticket_id, american_odds, status")
+        .eq("ticket_id", ticket.id);
+
+      if (legsErr) throw legsErr;
+
+      const legsArr = (legs ?? []) as Leg[];
+
+      // compute payout/profit
+      const stake = Number(ticket.stake || 0);
+      const settledAt = new Date().toISOString();
+
+      let payout: number | null = null;
+      let profit: number | null = null;
+
+      if (nextStatus === "open" || nextStatus === "partial") {
+        payout = null;
+        profit = null;
+      } else if (nextStatus === "push" || nextStatus === "void") {
+        payout = round2(stake);
+        profit = 0;
+      } else if (nextStatus === "lost") {
+        payout = 0;
+        profit = round2(0 - stake);
+      } else if (nextStatus === "won") {
+        if (ticket.ticket_type === "single") {
+          const a = Number(legsArr?.[0]?.american_odds);
+          const dec = americanToDecimal(a);
+          payout = round2(stake * dec);
+          profit = round2(payout - stake);
+        } else {
+          // parlay: multiply decimal odds, ignore push/void legs as 1.0
+          const m = legsArr.reduce((acc, l) => {
+            if (l.status === "push" || l.status === "void") return acc * 1;
+            return acc * americanToDecimal(Number(l.american_odds));
+          }, 1);
+          payout = round2(stake * m);
+          profit = round2(payout - stake);
+        }
+      }
+
+      const { error: tErr } = await supabase
+        .from("tickets")
+        .update({
+          status: nextStatus,
+          payout,
+          profit,
+          settled_at: nextStatus === "open" ? null : settledAt,
+        })
+        .eq("id", ticket.id);
+
+      if (tErr) throw tErr;
+
+      // keep legs roughly consistent for dashboard actions
+      if (legsArr.length) {
+        const legStatus: Leg["status"] =
+          nextStatus === "won"
+            ? "won"
+            : nextStatus === "lost"
+            ? "lost"
+            : nextStatus === "push"
+            ? "push"
+            : nextStatus === "void"
+            ? "void"
+            : "open";
+
+        await supabase
+          .from("legs")
+          .update({ status: legStatus })
+          .eq("ticket_id", ticket.id);
+      }
+
+      // optimistic local update
+      setTickets((prev) =>
+        prev.map((t) =>
+          t.id === ticket.id
+            ? {
+                ...t,
+                status: nextStatus,
+                payout,
+                profit,
+                settled_at: nextStatus === "open" ? null : settledAt,
+              }
+            : t
+        )
+      );
+    } catch (e: any) {
+      console.error(e);
+      alert(e?.message ?? "Failed to update ticket.");
+    } finally {
+      setQuickUpdatingId(null);
+    }
+  }
+
+  function TabButton({
+    id,
+    label,
+    count,
+  }: {
+    id: DashboardTab;
+    label: string;
+    count?: number;
+  }) {
+    const active = tab === id;
+    return (
+      <button
+        onClick={() => setTab(id)}
+        className="h-11 rounded-xl border border-zinc-200 px-4 font-extrabold"
+        style={{
+          background: active ? "#111" : "white",
+          color: active ? "white" : "#111",
+        }}
+      >
+        {label}
+        {typeof count === "number" ? ` (${fmtNumber(count)})` : ""}
+      </button>
+    );
+  }
 
   if (!authChecked) return <div className="px-4 py-6">Checking session…</div>;
   if (loading) return <div className="px-4 py-6">Loading…</div>;
@@ -451,7 +607,14 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Filters */}
+      {/* Tabs */}
+      <div className="mt-4 flex flex-wrap gap-2">
+        <TabButton id="OVERVIEW" label="Overview" />
+        <TabButton id="OPEN" label="Open" count={openTicketsAll.length} />
+        <TabButton id="HISTORY" label="History" count={tickets.length - openTicketsAll.length} />
+      </div>
+
+      {/* Filters (apply to Overview charts + ticket lists) */}
       <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <label className="grid gap-1.5">
           <span className="text-xs opacity-70">League</span>
@@ -527,188 +690,228 @@ export default function DashboardPage() {
         )}
       </div>
 
-      {/* Stat Cards */}
-      <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {/* Starting Bankroll */}
-        <div className="rounded-2xl border border-zinc-200 bg-white p-4">
-          <div className="text-xs opacity-70">Starting Bankroll</div>
-
-          {profileLoading ? (
-            <div className="mt-2 text-sm opacity-70">Loading…</div>
-          ) : (
-            <>
-              <div className="mt-2">
-                <input
-                  type="number"
-                  value={startingBankroll}
-                  onChange={(e) => setStartingBankroll(Number(e.target.value))}
-                  className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
-                />
-              </div>
-
-              <button
-                onClick={saveStartingBankroll}
-                disabled={profileSaving}
-                className="mt-2 inline-flex h-11 w-full items-center justify-center rounded-xl border border-zinc-200 bg-white font-bold disabled:opacity-60"
-              >
-                {profileSaving ? "Saving…" : "Save"}
-              </button>
-            </>
-          )}
-        </div>
-
-        {/* Current Bankroll */}
-        <div className="rounded-2xl border border-zinc-200 bg-white p-4">
-          <div className="text-xs opacity-70">Current Bankroll</div>
-          <div
-            className="mt-1 text-2xl font-black"
-            style={{ color: profitColor(currentBankroll - startingBankroll) }}
-          >
-            {fmtMoney(currentBankroll)}
-          </div>
-          <div className="mt-1 text-xs leading-snug opacity-70">
-            Starting + all-time profit
-          </div>
-        </div>
-
-        {/* Total Profit */}
-        <div className="rounded-2xl border border-zinc-200 bg-white p-4">
-          <div className="text-xs opacity-70">Total Profit</div>
-          <div
-            className="mt-1 text-2xl font-black"
-            style={{ color: profitColor(summary.totalProfit) }}
-          >
-            {fmtMoney(summary.totalProfit)}
-          </div>
-        </div>
-
-        {/* Total Bet */}
-        <div className="rounded-2xl border border-zinc-200 bg-white p-4">
-          <div className="text-xs opacity-70">Total Bet</div>
-          <div className="mt-1 text-2xl font-black">{fmtMoney(summary.totalBet)}</div>
-        </div>
-
-        {/* ROI */}
-        <div className="rounded-2xl border border-zinc-200 bg-white p-4">
-          <div className="text-xs opacity-70">ROI</div>
-          <div className="mt-1 text-2xl font-black" style={{ color: profitColor(summary.roi) }}>
-            {summary.roi.toFixed(2)}%
-          </div>
-        </div>
-
-        {/* Unit Size */}
-        <div className="rounded-2xl border border-zinc-200 bg-white p-4">
-          <div className="text-xs opacity-70">Unit Size</div>
-          <div className="mt-1 text-2xl font-black">{fmtMoney(unitCard.unitSize)}</div>
-          <div className="mt-1 text-xs leading-snug opacity-70">
-            5% of {fmtMoney(unitCard.prevMonthEndingBankroll)}
-            <br />
-            Rounded down to nearest $50
-            <br />
-            Max cap: $10,000
-            <br />
-            As of {unitCard.prevMonthEndLabel}
-          </div>
-        </div>
-      </div>
-
-      {/* Chart */}
-      <div className="mt-5 rounded-2xl border border-zinc-200 bg-white p-4">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="font-black">{chartTitle}</div>
-
-          <div className="grid grid-cols-2 gap-2 sm:flex sm:gap-2">
-            <button
-              onClick={() => setGraphMode("BANKROLL")}
-              className="h-11 rounded-xl border border-zinc-200 px-3 font-extrabold"
-              style={{
-                background: graphMode === "BANKROLL" ? "#111" : "white",
-                color: graphMode === "BANKROLL" ? "white" : "#111",
-              }}
-            >
-              Bankroll
-            </button>
-            <button
-              onClick={() => setGraphMode("PROFIT")}
-              className="h-11 rounded-xl border border-zinc-200 px-3 font-extrabold"
-              style={{
-                background: graphMode === "PROFIT" ? "#111" : "white",
-                color: graphMode === "PROFIT" ? "white" : "#111",
-              }}
-            >
-              Profit
-            </button>
-          </div>
-        </div>
-
-        <div className="mt-3 h-64 sm:h-72">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={chartData} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
-              <defs>
-                <linearGradient id="chartFill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#111" stopOpacity={0.18} />
-                  <stop offset="100%" stopColor="#111" stopOpacity={0.02} />
-                </linearGradient>
-              </defs>
-
-              <CartesianGrid strokeDasharray="4 4" vertical={false} />
-              <XAxis dataKey="date" tick={{ fontSize: 12 }} tickLine={false} axisLine={false} minTickGap={24} />
-              <YAxis
-                tick={{ fontSize: 12 }}
-                tickLine={false}
-                axisLine={false}
-                tickFormatter={(v) => fmtMoneyCompact(Number(v))}
-              />
-              <Tooltip content={<CustomTooltip />} />
-              <Area type="monotone" dataKey={chartKey} fill="url(#chartFill)" stroke="none" />
-              <Line type="monotone" name={chartTitle} dataKey={chartKey} stroke="#111" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
-      {/* Tickets */}
-      <h2 className="mt-6 text-xl font-black">Tickets</h2>
-
-      {statusFilter === "ALL" ? (
+      {/* OVERVIEW */}
+      {tab === "OVERVIEW" && (
         <>
-          <div className="mt-3 mb-2 font-black">
-            Open Tickets{" "}
-            <span className="font-bold opacity-60">({openTickets.length})</span>
-          </div>
-          <TicketList tickets={openTickets} />
+          {/* Stat Cards */}
+          <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {/* Starting Bankroll */}
+            <div className="rounded-2xl border border-zinc-200 bg-white p-4">
+              <div className="text-xs opacity-70">Starting Bankroll</div>
 
-          <div className="mt-5 mb-2 font-black">
-            Settled Tickets{" "}
-            <span className="font-bold opacity-60">({settledTickets.length})</span>
+              {profileLoading ? (
+                <div className="mt-2 text-sm opacity-70">Loading…</div>
+              ) : (
+                <>
+                  <div className="mt-2">
+                    <input
+                      type="number"
+                      value={startingBankroll}
+                      onChange={(e) => setStartingBankroll(Number(e.target.value))}
+                      className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
+                    />
+                  </div>
+
+                  <button
+                    onClick={saveStartingBankroll}
+                    disabled={profileSaving}
+                    className="mt-2 inline-flex h-11 w-full items-center justify-center rounded-xl border border-zinc-200 bg-white font-bold disabled:opacity-60"
+                  >
+                    {profileSaving ? "Saving…" : "Save"}
+                  </button>
+                </>
+              )}
+            </div>
+
+            {/* Current Bankroll */}
+            <div className="rounded-2xl border border-zinc-200 bg-white p-4">
+              <div className="text-xs opacity-70">Current Bankroll</div>
+              <div
+                className="mt-1 text-2xl font-black"
+                style={{ color: profitColor(currentBankroll - startingBankroll) }}
+              >
+                {fmtMoney(currentBankroll)}
+              </div>
+              <div className="mt-1 text-xs leading-snug opacity-70">Starting + all-time profit</div>
+            </div>
+
+            {/* Total Profit */}
+            <div className="rounded-2xl border border-zinc-200 bg-white p-4">
+              <div className="text-xs opacity-70">Total Profit (Filter)</div>
+              <div className="mt-1 text-2xl font-black" style={{ color: profitColor(summary.totalProfit) }}>
+                {fmtMoney(summary.totalProfit)}
+              </div>
+              <div className="mt-1 text-xs leading-snug opacity-70">Record: {summary.record}</div>
+            </div>
+
+            {/* Total Bet */}
+            <div className="rounded-2xl border border-zinc-200 bg-white p-4">
+              <div className="text-xs opacity-70">Total Bet (Filter)</div>
+              <div className="mt-1 text-2xl font-black">{fmtMoney(summary.totalBet)}</div>
+            </div>
+
+            {/* ROI */}
+            <div className="rounded-2xl border border-zinc-200 bg-white p-4">
+              <div className="text-xs opacity-70">ROI (Filter)</div>
+              <div className="mt-1 text-2xl font-black" style={{ color: profitColor(summary.roi) }}>
+                {summary.roi.toFixed(2)}%
+              </div>
+            </div>
+
+            {/* Unit Size */}
+            <div className="rounded-2xl border border-zinc-200 bg-white p-4">
+              <div className="text-xs opacity-70">Unit Size</div>
+              <div className="mt-1 text-2xl font-black">{fmtMoney(unitCard.unitSize)}</div>
+              <div className="mt-1 text-xs leading-snug opacity-70">
+                5% of {fmtMoney(unitCard.prevMonthEndingBankroll)}
+                <br />
+                Rounded down to nearest $50
+                <br />
+                Max cap: $10,000
+                <br />
+                As of {unitCard.prevMonthEndLabel}
+              </div>
+            </div>
           </div>
-          <TicketList tickets={settledTickets} />
+
+          {/* Chart */}
+          <div className="mt-5 rounded-2xl border border-zinc-200 bg-white p-4">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div className="font-black">{chartTitle}</div>
+
+              <div className="grid grid-cols-2 gap-2 sm:flex sm:gap-2">
+                <button
+                  onClick={() => setGraphMode("BANKROLL")}
+                  className="h-11 rounded-xl border border-zinc-200 px-3 font-extrabold"
+                  style={{
+                    background: graphMode === "BANKROLL" ? "#111" : "white",
+                    color: graphMode === "BANKROLL" ? "white" : "#111",
+                  }}
+                >
+                  Bankroll
+                </button>
+                <button
+                  onClick={() => setGraphMode("PROFIT")}
+                  className="h-11 rounded-xl border border-zinc-200 px-3 font-extrabold"
+                  style={{
+                    background: graphMode === "PROFIT" ? "#111" : "white",
+                    color: graphMode === "PROFIT" ? "white" : "#111",
+                  }}
+                >
+                  Profit
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-3 h-64 sm:h-72">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={chartData} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="chartFill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#111" stopOpacity={0.18} />
+                      <stop offset="100%" stopColor="#111" stopOpacity={0.02} />
+                    </linearGradient>
+                  </defs>
+
+                  <CartesianGrid strokeDasharray="4 4" vertical={false} />
+                  <XAxis dataKey="date" tick={{ fontSize: 12 }} tickLine={false} axisLine={false} minTickGap={24} />
+                  <YAxis
+                    tick={{ fontSize: 12 }}
+                    tickLine={false}
+                    axisLine={false}
+                    // ✅ Bankroll graph should never dip below starting bankroll
+                    domain={graphMode === "BANKROLL" ? [Number(startingBankroll) || 0, "auto"] : ["auto", "auto"]}
+                    tickFormatter={(v) => fmtMoneyCompact(Number(v))}
+                  />
+                  <Tooltip content={<CustomTooltip />} />
+
+                  {graphMode === "BANKROLL" ? (
+                    <>
+                      <Area type="monotone" dataKey="bankroll" fill="url(#chartFill)" stroke="none" />
+                      <Line type="monotone" name="Bankroll" dataKey="bankroll" stroke="#111" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} />
+                    </>
+                  ) : (
+                    <>
+                      <Area type="monotone" dataKey="profitInRange" fill="url(#chartFill)" stroke="none" />
+                      {/* ✅ Split line: green when >=0, red when <0 */}
+                      <Line type="monotone" name="Profit" dataKey="profitPos" stroke="#0f7a2a" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} />
+                      <Line type="monotone" name="Profit" dataKey="profitNeg" stroke="#b00020" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} />
+                    </>
+                  )}
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
         </>
-      ) : (
-        <div className="mt-3">
-          <TicketList tickets={statusFilteredTickets} />
+      )}
+
+      {/* OPEN */}
+      {tab === "OPEN" && (
+        <div className="mt-6">
+          <div className="flex items-end justify-between gap-3">
+            <h2 className="text-xl font-black">Open Tickets ({fmtNumber(openTickets.length)})</h2>
+            <button
+              onClick={loadTickets}
+              className="inline-flex h-11 items-center justify-center rounded-xl border border-zinc-200 bg-white px-4 font-bold"
+            >
+              Refresh
+            </button>
+          </div>
+
+          <div className="mt-3">
+            <TicketList
+              tickets={openTickets}
+              mode="OPEN_ACTIONS"
+              onQuickSettle={quickSettleTicket}
+              quickUpdatingId={quickUpdatingId}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* HISTORY */}
+      {tab === "HISTORY" && (
+        <div className="mt-6">
+          <h2 className="text-xl font-black">
+            Tickets ({fmtNumber(statusFilteredTickets.length)})
+          </h2>
+
+          {statusFilter === "ALL" ? (
+            <>
+              <div className="mt-3 mb-2 font-black">
+                Settled Tickets{" "}
+                <span className="font-bold opacity-60">({fmtNumber(settledTickets.length)})</span>
+              </div>
+              <TicketList tickets={settledTickets} mode="LINK" />
+
+              <div className="mt-5 mb-2 font-black">
+                Open Tickets{" "}
+                <span className="font-bold opacity-60">({fmtNumber(openTickets.length)})</span>
+              </div>
+              <TicketList tickets={openTickets} mode="LINK" />
+            </>
+          ) : (
+            <div className="mt-3">
+              <TicketList tickets={statusFilteredTickets} mode="LINK" />
+            </div>
+          )}
         </div>
       )}
     </div>
   );
 }
 
-function TicketList({ tickets }: { tickets: Ticket[] }) {
-  function profitColorLocal(n: number) {
-    if (n > 0) return "#0f7a2a";
-    if (n < 0) return "#b00020";
-    return "#111";
-  }
-  function fmtMoneyLocal(n: number) {
-    return n.toFixed(2);
-  }
-  function ticketDateForGroupingLocal(t: Ticket) {
-    const d = new Date(t.placed_at);
-    const pad = (n: number) => String(n).padStart(2, "0");
-    const yyyyMmDdLocal = (dd: Date) =>
-      `${dd.getFullYear()}-${pad(dd.getMonth() + 1)}-${pad(dd.getDate())}`;
-    return yyyyMmDdLocal(new Date(d.getFullYear(), d.getMonth(), d.getDate()));
-  }
+function TicketList({
+  tickets,
+  mode,
+  onQuickSettle,
+  quickUpdatingId,
+}: {
+  tickets: Ticket[];
+  mode: "LINK" | "OPEN_ACTIONS";
+  onQuickSettle?: (ticket: Ticket, nextStatus: Ticket["status"]) => Promise<void>;
+  quickUpdatingId?: string | null;
+}) {
   function statusPillColor(s: Ticket["status"]) {
     if (s === "won") return "rgba(15, 122, 42, 0.12)";
     if (s === "lost") return "rgba(176, 0, 32, 0.10)";
@@ -716,56 +919,123 @@ function TicketList({ tickets }: { tickets: Ticket[] }) {
     return "rgba(17, 17, 17, 0.06)";
   }
 
+  function TicketCardInner({ t }: { t: Ticket }) {
+    return (
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="grid gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="font-black">
+              {t.league ?? "—"} • {t.ticket_type.toUpperCase()}
+            </div>
+
+            <span
+              className="rounded-full border border-black/5 px-2 py-1 text-xs font-black"
+              style={{ background: statusPillColor(t.status) }}
+            >
+              {t.status.toUpperCase()}
+            </span>
+          </div>
+
+          <div className="text-xs opacity-75">
+            Date: {ticketDateForGrouping(t)} • Book: {t.book ?? "—"}
+          </div>
+
+          <div className="text-xs opacity-75">
+            Bet: {fmtMoney(Number(t.stake || 0))}
+            {typeof t.payout === "number" ? ` • Payout: ${fmtMoney(t.payout)}` : ""}
+          </div>
+
+          {mode === "OPEN_ACTIONS" && (
+            <div className="mt-1 flex flex-wrap gap-2">
+              <button
+                disabled={quickUpdatingId === t.id}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onQuickSettle?.(t, "won");
+                }}
+                className="h-10 rounded-xl border border-zinc-200 bg-white px-3 text-sm font-extrabold disabled:opacity-60"
+              >
+                ✔ Win
+              </button>
+              <button
+                disabled={quickUpdatingId === t.id}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onQuickSettle?.(t, "lost");
+                }}
+                className="h-10 rounded-xl border border-zinc-200 bg-white px-3 text-sm font-extrabold disabled:opacity-60"
+              >
+                ✖ Loss
+              </button>
+              <button
+                disabled={quickUpdatingId === t.id}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onQuickSettle?.(t, "push");
+                }}
+                className="h-10 rounded-xl border border-zinc-200 bg-white px-3 text-sm font-extrabold disabled:opacity-60"
+              >
+                Push
+              </button>
+              <button
+                disabled={quickUpdatingId === t.id}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onQuickSettle?.(t, "void");
+                }}
+                className="h-10 rounded-xl border border-zinc-200 bg-white px-3 text-sm font-extrabold disabled:opacity-60"
+              >
+                Void
+              </button>
+
+              {quickUpdatingId === t.id && (
+                <span className="self-center text-xs font-bold opacity-70">Updating…</span>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="sm:text-right">
+          <div className="text-xs opacity-70">Profit</div>
+          <div
+            className="text-lg font-black"
+            style={{
+              color: typeof t.profit === "number" ? profitColor(t.profit) : "#111",
+            }}
+          >
+            {typeof t.profit === "number" ? fmtMoney(t.profit) : "—"}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="grid gap-3">
       {tickets.length === 0 && <div className="text-sm opacity-70">No tickets in this filter.</div>}
 
-      {tickets.map((t) => (
-        <Link
-          key={t.id}
-          href={`/ticket/${t.id}`}
-          className="block rounded-2xl border border-zinc-200 bg-white p-4 no-underline shadow-[0_1px_0_rgba(0,0,0,0.03)]"
-        >
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="grid gap-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="font-black">
-                  {t.league ?? "—"} • {t.ticket_type.toUpperCase()}
-                </div>
-
-                <span
-                  className="rounded-full border border-black/5 px-2 py-1 text-xs font-black"
-                  style={{ background: statusPillColor(t.status) }}
-                >
-                  {t.status.toUpperCase()}
-                </span>
-              </div>
-
-              <div className="text-xs opacity-75">
-                Date: {ticketDateForGroupingLocal(t)} • Book: {t.book ?? "—"}
-              </div>
-
-              <div className="text-xs opacity-75">
-                Bet: {fmtMoneyLocal(t.stake)}
-                {typeof t.payout === "number" ? ` • Payout: ${fmtMoneyLocal(t.payout)}` : ""}
-              </div>
-            </div>
-
-            <div className="sm:text-right">
-              <div className="text-xs opacity-70">Profit</div>
-              <div
-                className="text-lg font-black"
-                style={{
-                  color:
-                    typeof t.profit === "number" ? profitColorLocal(t.profit) : "#111",
-                }}
-              >
-                {typeof t.profit === "number" ? fmtMoneyLocal(t.profit) : "—"}
-              </div>
-            </div>
+      {tickets.map((t) =>
+        mode === "LINK" ? (
+          <Link
+            key={t.id}
+            href={`/ticket/${t.id}`}
+            className="block rounded-2xl border border-zinc-200 bg-white p-4 no-underline shadow-[0_1px_0_rgba(0,0,0,0.03)]"
+          >
+            <TicketCardInner t={t} />
+          </Link>
+        ) : (
+          <div
+            key={t.id}
+            className="block rounded-2xl border border-zinc-200 bg-white p-4 shadow-[0_1px_0_rgba(0,0,0,0.03)]"
+          >
+            <TicketCardInner t={t} />
           </div>
-        </Link>
-      ))}
+        )
+      )}
     </div>
   );
 }

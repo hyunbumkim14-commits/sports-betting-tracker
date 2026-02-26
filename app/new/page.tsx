@@ -1,7 +1,13 @@
+/* =========================================================
+   PASTE THIS FILE AT:
+   /app/new/page.tsx
+   ========================================================= */
+
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabase";
 
 type TicketStatus = "open" | "won" | "lost" | "push" | "void" | "partial";
@@ -17,9 +23,6 @@ function pad2(n: number) {
 }
 function todayYyyyMmDd() {
   const d = new Date();
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-}
-function yyyyMmDd(d: Date) {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }
 function lastDayOfPreviousMonth(now: Date) {
@@ -67,6 +70,8 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
 }
 
 export default function NewTicketPage() {
+  const router = useRouter();
+
   const [ticketType, setTicketType] = useState<"single" | "parlay">("single");
 
   // ✅ Default bet mode = To Win (Profit)
@@ -390,7 +395,8 @@ export default function NewTicketPage() {
       return;
     }
 
-    window.location.href = "/";
+    // ✅ After save: go back to dashboard
+    router.push("/");
   }
 
   return (
@@ -401,8 +407,7 @@ export default function NewTicketPage() {
           <div className="text-xs opacity-70">Create</div>
           <h1 className="text-2xl font-black tracking-tight sm:text-3xl">New Bet</h1>
           <div className="mt-1 text-xs opacity-70">
-            Default To Win:{" "}
-            <b>{unitLoading ? "Loading unit…" : `${unitSize.toFixed(2)} (1 Unit)`}</b>
+            Default To Win: <b>{unitLoading ? "Loading unit…" : `${unitSize.toFixed(2)} (1 Unit)`}</b>
           </div>
         </div>
 
@@ -415,7 +420,7 @@ export default function NewTicketPage() {
       </div>
 
       {/* Ticket Info */}
-      <div className={`${cardClass} mt-4`}>
+      <div className={`rounded-2xl border border-zinc-200 bg-white p-4 shadow-[0_1px_0_rgba(0,0,0,0.03)] mt-4`}>
         <div className="mb-3 font-black">Ticket</div>
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -436,7 +441,7 @@ export default function NewTicketPage() {
                   ]);
                 }
               }}
-              className={inputClass}
+              className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
             >
               <option value="single">Single</option>
               <option value="parlay">Parlay</option>
@@ -450,7 +455,7 @@ export default function NewTicketPage() {
               value={league}
               onChange={(e) => setLeague(e.target.value)}
               placeholder="Select or type…"
-              className={inputClass}
+              className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
             />
             <datalist id="league-options">
               {LEAGUE_OPTIONS.map((l) => (
@@ -465,7 +470,7 @@ export default function NewTicketPage() {
               type="date"
               value={placedDate}
               onChange={(e) => setPlacedDate(e.target.value)}
-              className={inputClass}
+              className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
             />
           </div>
 
@@ -475,7 +480,7 @@ export default function NewTicketPage() {
               value={book}
               onChange={(e) => setBook(e.target.value)}
               placeholder="FanDuel, DK…"
-              className={inputClass}
+              className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
             />
             <div className="text-xs opacity-70">
               Default: <b>Bovada</b>
@@ -532,7 +537,7 @@ export default function NewTicketPage() {
                 if (betMode === "risk") setToWinFromRisk(next);
                 else setBetInput(next);
               }}
-              className={inputClass}
+              className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
               style={{ opacity: betMode === "risk" ? 1 : 0.85 }}
             />
           </div>
@@ -550,7 +555,7 @@ export default function NewTicketPage() {
                 else setToWinInput(next);
               }}
               placeholder={betMode === "towin" ? "" : "Auto (switch to To Win)"}
-              className={inputClass}
+              className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
               style={{ opacity: betMode === "towin" ? 1 : 0.85 }}
             />
             <div className="text-xs opacity-70">
@@ -564,7 +569,7 @@ export default function NewTicketPage() {
               value={ticketStatus}
               onChange={(e) => setTicketStatus(e.target.value as any)}
               disabled={ticketType === "parlay"}
-              className={inputClass}
+              className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
               style={{
                 opacity: ticketType === "parlay" ? 0.65 : 1,
                 cursor: ticketType === "parlay" ? "not-allowed" : "pointer",
@@ -591,18 +596,16 @@ export default function NewTicketPage() {
               value={actualPayout}
               min={0}
               step="0.01"
-              onChange={(e) =>
-                setActualPayout(e.target.value === "" ? "" : Number(e.target.value))
-              }
+              onChange={(e) => setActualPayout(e.target.value === "" ? "" : Number(e.target.value))}
               placeholder="Total return incl. bet"
-              className={inputClass}
+              className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
             />
           </div>
         </div>
       </div>
 
       {/* Legs */}
-      <div className={`${cardClass} mt-4`}>
+      <div className={`rounded-2xl border border-zinc-200 bg-white p-4 shadow-[0_1px_0_rgba(0,0,0,0.03)] mt-4`}>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div className="font-black">Legs</div>
           {canAddLeg && (
@@ -626,9 +629,7 @@ export default function NewTicketPage() {
             <div key={idx} className="rounded-2xl border border-zinc-200 bg-white p-3">
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-4 sm:items-end">
                 <div className="sm:col-span-2 grid gap-1.5">
-                  <FieldLabel>
-                    {ticketType === "single" ? "Selection" : `Leg ${idx + 1} Selection`}
-                  </FieldLabel>
+                  <FieldLabel>{ticketType === "single" ? "Selection" : `Leg ${idx + 1} Selection`}</FieldLabel>
                   <input
                     value={leg.selection}
                     onChange={(e) => {
@@ -637,7 +638,7 @@ export default function NewTicketPage() {
                       setLegs(copy);
                     }}
                     placeholder={ticketType === "single" ? "e.g. Lakers -2.5" : "Leg selection"}
-                    className={inputClass}
+                    className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
                   />
                 </div>
 
@@ -657,7 +658,7 @@ export default function NewTicketPage() {
                         else setRiskFromToWin(toWinInput === "" ? "0" : toWinInput);
                       }, 0);
                     }}
-                    className={inputClass}
+                    className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
                   />
                 </div>
 
@@ -676,7 +677,7 @@ export default function NewTicketPage() {
                         else setRiskFromToWin(toWinInput === "" ? "0" : toWinInput);
                       }, 0);
                     }}
-                    className={inputClass}
+                    className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
                     style={{
                       opacity: ticketType === "single" ? 0.65 : 1,
                       cursor: ticketType === "single" ? "not-allowed" : "pointer",
