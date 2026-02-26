@@ -418,7 +418,7 @@ export default function NewTicketPage() {
         <div className={`mt-4 ${cardClass}`}>
           <div className="mb-2 text-sm font-bold">Ticket</div>
 
-          <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-4">
             <div className="col-span-1">
               <FieldLabel>Type</FieldLabel>
               <select

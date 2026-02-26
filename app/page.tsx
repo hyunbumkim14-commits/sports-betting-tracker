@@ -6,7 +6,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../lib/supabase";
 import {
@@ -260,8 +260,18 @@ export default function DashboardPage() {
   const [quickUpdatingId, setQuickUpdatingId] = useState<string | null>(null);
 
   // Calendar tab state
+  const todayKey = useMemo(() => yyyyMmDd(new Date()), []);
   const [calendarMonth, setCalendarMonth] = useState(() => startOfMonth(new Date()));
-  const [selectedDay, setSelectedDay] = useState<string | null>(null);
+  const [selectedDay, setSelectedDay] = useState<string | null>(() => todayKey);
+  const monthPickerRef = useRef<HTMLInputElement | null>(null);
+
+  // ✅ When you enter Calendar tab, default to today's bets
+  useEffect(() => {
+    if (tab !== "CALENDAR") return;
+    const today = yyyyMmDd(new Date());
+    setSelectedDay(today);
+    setCalendarMonth(startOfMonth(new Date()));
+  }, [tab]);
 
   useEffect(() => {
     let alive = true;
@@ -903,6 +913,14 @@ export default function DashboardPage() {
     return map;
   }, [ticketsInCalendarMonth]);
 
+  const calendarMonthProfit = useMemo(() => {
+  const sum = ticketsInCalendarMonth.reduce((acc, t) => {
+    const p = typeof t.profit === "number" && Number.isFinite(t.profit) ? t.profit : 0;
+    return acc + p;
+  }, 0);
+  return Math.round(sum); // ✅ whole number
+}, [ticketsInCalendarMonth]);
+
   const ticketsForSelectedDay = useMemo(() => {
     if (!selectedDay) return [];
     const startIso = toLocalMidnightIso(selectedDay);
@@ -1165,7 +1183,52 @@ export default function DashboardPage() {
               ←
             </button>
 
-            <div className="text-lg font-extrabold">{monthLabel(calendarMonthStart)}</div>
+            <div className="flex flex-col items-center">
+              {/* Clickable Month Label */}
+              <button
+                type="button"
+                onClick={() => monthPickerRef.current?.showPicker?.() ?? monthPickerRef.current?.click()}
+                className="text-lg font-extrabold underline decoration-zinc-300 underline-offset-4"
+              >
+                {monthLabel(calendarMonthStart)}
+              </button>
+
+              {/* Monthly Profit */}
+              <div
+                className="mt-1 text-sm font-bold"
+                style={{
+                  color:
+                    calendarMonthProfit > 0
+                      ? "#0f7a2a"
+                      : calendarMonthProfit < 0
+                      ? "#b00020"
+                      : "#666",
+                }}
+              >
+                ({calendarMonthProfit === 0
+                  ? "0"
+                  : calendarMonthProfit > 0
+                  ? `+${calendarMonthProfit}`
+                  : `${calendarMonthProfit}`})
+              </div>
+
+              {/* Hidden Native Month Picker */}
+              <input
+                ref={monthPickerRef}
+                type="month"
+                className="sr-only"
+                value={`${calendarMonthStart.getFullYear()}-${String(
+                  calendarMonthStart.getMonth() + 1
+                ).padStart(2, "0")}`}
+                onChange={(e) => {
+                  const [y, m] = e.target.value.split("-").map(Number);
+                  if (!y || !m) return;
+                  const next = new Date(y, m - 1, 1);
+                  setCalendarMonth(startOfMonth(next));
+                  setSelectedDay(`${y}-${String(m).padStart(2, "0")}-01`);
+                }}
+              />
+            </div>
 
             <button
               onClick={() => {
