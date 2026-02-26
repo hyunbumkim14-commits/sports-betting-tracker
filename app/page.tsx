@@ -365,47 +365,52 @@ export default function DashboardPage() {
   }, [tickets, startingBankroll]);
 
   const chartData = useMemo(() => {
-    const startIso = rangeStart ? toLocalMidnightIso(rangeStart) : null;
+  const startIso = rangeStart ? toLocalMidnightIso(rangeStart) : null;
 
-    const profitBeforeRange = tickets.reduce((acc, t) => {
-      const passLeague =
-        leagueFilter === "ALL" ? true : (t.league ?? "") === leagueFilter;
-      if (!passLeague) return acc;
+  // bankroll baseline includes profit BEFORE the selected range
+  const profitBeforeRange = tickets.reduce((acc, t) => {
+    const passLeague =
+      leagueFilter === "ALL" ? true : (t.league ?? "") === leagueFilter;
+    if (!passLeague) return acc;
 
-      if (startIso && t.placed_at < startIso) {
-        if (typeof t.profit === "number" && Number.isFinite(t.profit)) return acc + t.profit;
-      }
-      return acc;
-    }, 0);
-
-    const baselineBankroll = round2((Number(startingBankroll) || 0) + profitBeforeRange);
-
-    const map = new Map<string, number>();
-    for (const t of filteredTickets) {
-      const day = ticketDateForGrouping(t);
-      const p = typeof t.profit === "number" && Number.isFinite(t.profit) ? t.profit : 0;
-      map.set(day, (map.get(day) ?? 0) + p);
+    if (startIso && t.placed_at < startIso) {
+      if (typeof t.profit === "number" && Number.isFinite(t.profit)) return acc + t.profit;
     }
+    return acc;
+  }, 0);
 
-    const days = Array.from(map.keys()).sort();
-    let runningBankroll = baselineBankroll;
-    let runningProfit = round2(baselineBankroll - (Number(startingBankroll) || 0));
+  const baselineBankroll = round2((Number(startingBankroll) || 0) + profitBeforeRange);
 
-    return days.map((d) => {
-      const dayProfit = map.get(d) ?? 0;
-      runningBankroll += dayProfit;
-      runningProfit += dayProfit;
+  // day -> sum profit for tickets IN the selected range (filteredTickets already obeys date range)
+  const map = new Map<string, number>();
+  for (const t of filteredTickets) {
+    const day = ticketDateForGrouping(t);
+    const p = typeof t.profit === "number" && Number.isFinite(t.profit) ? t.profit : 0;
+    map.set(day, (map.get(day) ?? 0) + p);
+  }
 
-      return {
-        date: d,
-        bankroll: round2(runningBankroll),
-        cumulativeProfit: round2(runningProfit),
-      };
-    });
+  const days = Array.from(map.keys()).sort();
+  let runningBankroll = baselineBankroll;
+
+  // ✅ Profit resets to 0 at the selected range start
+  let profitInRange = 0;
+
+  return days.map((d) => {
+    const dayProfit = map.get(d) ?? 0;
+
+    runningBankroll += dayProfit;
+    profitInRange += dayProfit;
+
+    return {
+      date: d,
+      bankroll: round2(runningBankroll),
+      profitInRange: round2(profitInRange),
+    };
+  });
   }, [filteredTickets, tickets, startingBankroll, leagueFilter, rangeStart]);
 
-  const chartTitle = graphMode === "BANKROLL" ? "Bankroll" : "Profit";
-  const chartKey = graphMode === "BANKROLL" ? "bankroll" : "cumulativeProfit";
+  const chartTitle = graphMode === "BANKROLL" ? "Bankroll" : "Profit (Range)";
+  const chartKey = graphMode === "BANKROLL" ? "bankroll" : "profitInRange";
 
   const openTickets = useMemo(
     () => statusFilteredTickets.filter((t) => t.status === "open"),
