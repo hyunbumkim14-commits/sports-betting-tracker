@@ -1269,9 +1269,21 @@ export default function DashboardPage() {
           </Card>
 
           <Card title="Unit Size">
-            <div className="text-2xl font-extrabold">{fmtMoney(unitCard.unitSize)}</div>
+            <div className="text-2xl font-extrabold">
+              {fmtMoney(unitCard.unitSize)}
+            </div>
+
             <div className="mt-1 text-xs text-zinc-600">
-              Based on ending bankroll {fmtMoney(unitCard.prevMonthEndingBankroll)} (prev month end)
+              Based on ending bankroll{" "}
+              <span className="font-extrabold">
+                {fmtMoney(unitCard.prevMonthEndingBankroll)}
+              </span>{" "}
+              (previous month end).
+            </div>
+
+            <div className="mt-2 text-xs text-zinc-600">
+              Calculation: 5% of the ending bankroll, rounded down to the nearest $50,
+              with a maximum of $10,000.
             </div>
           </Card>
 
