@@ -108,6 +108,14 @@ const rowStyle: React.CSSProperties = {
   gap: 12,
 };
 
+function mapTicketStatusToLegStatus(s: TicketStatus): Leg["status"] {
+  if (s === "won") return "won";
+  if (s === "lost") return "lost";
+  if (s === "push") return "push";
+  if (s === "void") return "void";
+  return "open"; // open/partial -> open
+}
+
 export default function TicketPage() {
   const params = useParams();
   const router = useRouter();
@@ -205,6 +213,13 @@ export default function TicketPage() {
     return "push";
   }, [ticket, legs]);
 
+  // ✅ Single: keep leg status in UI synced to ticket status
+  useEffect(() => {
+    if (!ticket || ticket.ticket_type !== "single") return;
+    const mapped = mapTicketStatusToLegStatus(singleStatus);
+    setLegs((prev) => prev.map((l) => ({ ...l, status: mapped })));
+  }, [ticket, singleStatus]);
+
   // ✅ Effective multiplier used for To Win calc (single = its leg; parlay = product; push/void = 1)
   const { multiplier, multiplierValid } = useMemo(() => {
     try {
@@ -287,7 +302,7 @@ export default function TicketPage() {
     if (ticket.ticket_type === "single") {
       const status = singleStatus;
 
-      if (status === "open") return { payout: null, profit: null };
+      if (status === "open" || status === "partial") return { payout: null, profit: null };
       if (status === "push" || status === "void") return { payout: round2(stakeNum), profit: 0 };
       if (legs.length !== 1) return { payout: null, profit: null };
       if (status === "lost") return { payout: 0, profit: round2(0 - stakeNum) };
@@ -338,7 +353,7 @@ export default function TicketPage() {
 
     const { payout, profit } = computedPayoutProfit;
 
-    const settledAtIso = statusToStore === "open" ? null : placedAtIso;
+    const settledAtIso = statusToStore === "open" || statusToStore === "partial" ? null : placedAtIso;
 
     const { error } = await supabase
       .from("tickets")
@@ -358,6 +373,24 @@ export default function TicketPage() {
       console.error(error);
       alert(`Failed to save: ${error.message}`);
       return;
+    }
+
+    // ✅ Single: force leg status in DB to match ticket status
+    if (ticket.ticket_type === "single") {
+      const mapped = mapTicketStatusToLegStatus(statusToStore);
+      const firstLegId = legs[0]?.id;
+      if (firstLegId) {
+        const { error: legErr } = await supabase
+          .from("legs")
+          .update({ status: mapped })
+          .eq("id", firstLegId);
+
+        if (legErr) {
+          console.error(legErr);
+          alert("Saved ticket, but failed to sync single leg status.");
+          return;
+        }
+      }
     }
 
     setPayoutEdited(false);
@@ -458,6 +491,12 @@ export default function TicketPage() {
               {computedPayoutProfit.payout === null ? "—" : computedPayoutProfit.payout.toFixed(2)}
             </div>
           </div>
+
+          {ticket.ticket_type === "single" && (
+            <div style={{ fontSize: 12, opacity: 0.7, alignSelf: "flex-end" }}>
+              Single: leg status mirrors ticket status
+            </div>
+          )}
         </div>
       </div>
 
@@ -648,8 +687,13 @@ export default function TicketPage() {
                 <FieldLabel>Leg Status</FieldLabel>
                 <select
                   value={leg.status}
+                  disabled={ticket.ticket_type === "single"}
                   onChange={(e) => saveLegStatus(leg.id, e.target.value as Leg["status"])}
-                  style={selectStyle}
+                  style={{
+                    ...selectStyle,
+                    opacity: ticket.ticket_type === "single" ? 0.6 : 1,
+                    cursor: ticket.ticket_type === "single" ? "not-allowed" : "pointer",
+                  }}
                 >
                   <option value="open">open</option>
                   <option value="won">won</option>
@@ -657,6 +701,11 @@ export default function TicketPage() {
                   <option value="push">push</option>
                   <option value="void">void</option>
                 </select>
+                {ticket.ticket_type === "single" && (
+                  <div style={{ marginTop: 6, fontSize: 12, opacity: 0.7 }}>
+                    Mirrors ticket status
+                  </div>
+                )}
               </div>
 
               <div style={{ textAlign: "right" }}>

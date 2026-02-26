@@ -5,9 +5,11 @@
 
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { supabase } from "../../lib/supabase";
+
+type TicketStatus = "open" | "won" | "lost" | "push" | "void" | "partial";
 
 type LegDraft = {
   selection: string;
@@ -15,10 +17,45 @@ type LegDraft = {
   status: "open" | "won" | "lost" | "push" | "void";
 };
 
+function pad2(n: number) {
+  return String(n).padStart(2, "0");
+}
+
 function todayYyyyMmDd() {
   const d = new Date();
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+function yyyyMmDd(d: Date) {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+function lastDayOfPreviousMonth(now: Date) {
+  return new Date(now.getFullYear(), now.getMonth(), 0);
+}
+
+function round2(n: number) {
+  return Math.round(n * 100) / 100;
+}
+
+function americanToDecimal(american: number): number {
+  if (!Number.isFinite(american) || american === 0) throw new Error("Invalid American odds");
+  if (american > 0) return 1 + american / 100;
+  return 1 + 100 / Math.abs(american);
+}
+
+function computeUnitSize(prevMonthEndingBankroll: number) {
+  // 1) 5%
+  const raw = prevMonthEndingBankroll * 0.05;
+
+  // 2) round down to nearest $50
+  const roundedDown = Math.floor(raw / 50) * 50;
+
+  // guard if negative bankroll
+  const nonNegative = Math.max(0, roundedDown);
+
+  // 3) cap at 10k
+  return Math.min(10_000, nonNegative);
 }
 
 const LEAGUE_OPTIONS = [
@@ -70,40 +107,43 @@ const rowStyle: React.CSSProperties = {
   gap: 12,
 };
 
-function americanToDecimal(american: number): number {
-  if (!Number.isFinite(american) || american === 0) throw new Error("Invalid American odds");
-  if (american > 0) return 1 + american / 100;
-  return 1 + 100 / Math.abs(american);
-}
-
-function round2(n: number) {
-  return Math.round(n * 100) / 100;
+function mapTicketStatusToLegStatus(s: TicketStatus): LegDraft["status"] {
+  if (s === "won") return "won";
+  if (s === "lost") return "lost";
+  if (s === "push") return "push";
+  if (s === "void") return "void";
+  // open / partial -> leg open
+  return "open";
 }
 
 export default function NewTicketPage() {
   const [ticketType, setTicketType] = useState<"single" | "parlay">("single");
 
-  // ✅ Bet Mode
-  const [betMode, setBetMode] = useState<"risk" | "towin">("risk");
+  // ✅ Default bet mode = To Win (Profit)
+  const [betMode, setBetMode] = useState<"risk" | "towin">("towin");
 
   // store as strings so the user can clear the input without NaN fights
-  const [betInput, setBetInput] = useState<string>("50"); // stake / risk
+  const [betInput, setBetInput] = useState<string>(""); // stake / risk
   const [toWinInput, setToWinInput] = useState<string>(""); // profit target
 
-  const [book, setBook] = useState<string>("");
+  // ✅ Default book = Bovada
+  const [book, setBook] = useState<string>("Bovada");
   const [league, setLeague] = useState<string>("");
 
   const [placedDate, setPlacedDate] = useState<string>(() => todayYyyyMmDd());
 
-  const [ticketStatus, setTicketStatus] = useState<
-    "open" | "won" | "lost" | "push" | "void" | "partial"
-  >("open");
+  const [ticketStatus, setTicketStatus] = useState<TicketStatus>("open");
 
   const [actualPayout, setActualPayout] = useState<number | "">("");
 
   const [legs, setLegs] = useState<LegDraft[]>([
     { selection: "", american_odds: "-110", status: "open" },
   ]);
+
+  // Unit seeding (1 unit -> toWin)
+  const [unitLoading, setUnitLoading] = useState<boolean>(true);
+  const [unitSize, setUnitSize] = useState<number>(0);
+  const [seededDefaults, setSeededDefaults] = useState<boolean>(false);
 
   const canAddLeg = ticketType === "parlay";
   const addLeg = () =>
@@ -171,6 +211,150 @@ export default function NewTicketPage() {
     setToWinInput(String(round2(profit)));
   }
 
+  // ✅ Single: leg status mirrors ticket status (and leg status control should effectively be disabled)
+  useEffect(() => {
+    if (ticketType !== "single") return;
+    setLegs((prev) => {
+      if (prev.length !== 1) return [{ selection: "", american_odds: "-110", status: mapTicketStatusToLegStatus(ticketStatus) }];
+      const next = [...prev];
+      next[0] = { ...next[0], status: mapTicketStatusToLegStatus(ticketStatus) };
+      return next;
+    });
+  }, [ticketType, ticketStatus]);
+
+  // ✅ Fetch Unit Size (same logic as dashboard) so To Win defaults to 1 unit
+  useEffect(() => {
+    let alive = true;
+
+    async function loadUnit() {
+      setUnitLoading(true);
+
+      const { data: auth } = await supabase.auth.getUser();
+      const uid = auth.user?.id;
+      if (!uid) {
+        if (alive) setUnitLoading(false);
+        return;
+      }
+
+      // 1) starting bankroll
+      const { data: prof } = await supabase
+        .from("profiles")
+        .select("starting_bankroll")
+        .eq("id", uid)
+        .single();
+
+      const startingBankroll = Number(prof?.starting_bankroll) || 0;
+
+      // 2) realized profit up to end of previous month (based on placed_at)
+      const now = new Date();
+      const prevMonthEnd = lastDayOfPreviousMonth(now);
+      const prevMonthEndIsoExclusive = new Date(
+        prevMonthEnd.getFullYear(),
+        prevMonthEnd.getMonth(),
+        prevMonthEnd.getDate() + 1,
+        0,
+        0,
+        0
+      ).toISOString();
+
+      const { data: tix, error: tixErr } = await supabase
+        .from("tickets")
+        .select("profit, placed_at")
+        .lt("placed_at", prevMonthEndIsoExclusive);
+
+      if (tixErr) {
+        console.error(tixErr);
+      }
+
+      const realizedProfit = (tix ?? []).reduce((acc: number, t: any) => {
+        const p = t?.profit;
+        if (typeof p === "number" && Number.isFinite(p)) return acc + p;
+        return acc;
+      }, 0);
+
+      const prevMonthEndingBankroll = round2(startingBankroll + realizedProfit);
+      const u = computeUnitSize(prevMonthEndingBankroll);
+
+      if (!alive) return;
+
+      setUnitSize(u);
+      setUnitLoading(false);
+
+      // Seed default values once:
+      // - Mode: towin (already)
+      // - ToWin: 1 unit
+      // - Stake derived from odds
+      if (!seededDefaults) {
+        const toWin = String(round2(u));
+        setToWinInput(toWin);
+
+        // compute stake immediately (even if multiplierValid isn't ready, try next tick too)
+        setTimeout(() => setRiskFromToWin(toWin), 0);
+
+        setSeededDefaults(true);
+      }
+    }
+
+    loadUnit();
+
+    return () => {
+      alive = false;
+    };
+  }, [seededDefaults]);
+
+  function computePayoutProfitForCreate(args: {
+    ticketType: "single" | "parlay";
+    stake: number;
+    statusToStore: TicketStatus;
+    legs: LegDraft[];
+    payoutOverride: number | null;
+    derivedParlayStatus: "open" | "won" | "lost" | "push" | "void" | null;
+  }): { payout: number | null; profit: number | null; settled_at: string | null } {
+    const { ticketType, stake, statusToStore, legs, payoutOverride, derivedParlayStatus } = args;
+
+    // If payout override provided, always store it + profit immediately
+    if (typeof payoutOverride === "number" && Number.isFinite(payoutOverride)) {
+      const payout = round2(payoutOverride);
+      const profit = round2(payout - stake);
+      return { payout, profit, settled_at: statusToStore === "open" ? null : "SET_NOW" };
+    }
+
+    if (ticketType === "single") {
+      if (statusToStore === "open" || statusToStore === "partial") return { payout: null, profit: null, settled_at: null };
+      if (statusToStore === "push" || statusToStore === "void")
+        return { payout: round2(stake), profit: 0, settled_at: "SET_NOW" };
+      if (statusToStore === "lost")
+        return { payout: 0, profit: round2(0 - stake), settled_at: "SET_NOW" };
+      if (statusToStore === "won") {
+        const a = Number(legs[0]?.american_odds);
+        const dec = americanToDecimal(a);
+        const payout = round2(stake * dec);
+        const profit = round2(payout - stake);
+        return { payout, profit, settled_at: "SET_NOW" };
+      }
+      return { payout: null, profit: null, settled_at: null };
+    }
+
+    // parlay
+    const pStatus = (derivedParlayStatus ?? "open") as TicketStatus;
+    if (pStatus === "open") return { payout: null, profit: null, settled_at: null };
+    if (pStatus === "push" || pStatus === "void")
+      return { payout: round2(stake), profit: 0, settled_at: "SET_NOW" };
+    if (pStatus === "lost")
+      return { payout: 0, profit: round2(0 - stake), settled_at: "SET_NOW" };
+    if (pStatus === "won") {
+      const winMultiplier = legs.reduce((acc, l) => {
+        if (l.status === "push" || l.status === "void") return acc * 1;
+        const dec = americanToDecimal(Number(l.american_odds));
+        return acc * dec;
+      }, 1);
+      const payout = round2(stake * winMultiplier);
+      const profit = round2(payout - stake);
+      return { payout, profit, settled_at: "SET_NOW" };
+    }
+    return { payout: null, profit: null, settled_at: null };
+  }
+
   async function save() {
     const user = (await supabase.auth.getUser()).data.user;
     if (!user) {
@@ -220,9 +404,31 @@ export default function NewTicketPage() {
     }
 
     const placedAtIso = new Date(placedDate + "T00:00:00").toISOString();
-    const statusToStore =
-      ticketType === "parlay" ? (derivedParlayStatus as any) : ticketStatus;
+
+    const statusToStore: TicketStatus =
+      ticketType === "parlay"
+        ? ((derivedParlayStatus as any) ?? "open")
+        : ticketStatus;
+
     const leagueToStore = league.trim() === "" ? null : league.trim();
+
+    // ✅ Compute payout/profit NOW so dashboard updates immediately
+    const payoutOverride =
+      actualPayout === "" ? null : Number(actualPayout);
+
+    const computed = computePayoutProfitForCreate({
+      ticketType,
+      stake: stakeNum,
+      statusToStore,
+      legs,
+      payoutOverride,
+      derivedParlayStatus: derivedParlayStatus as any,
+    });
+
+    const settledAtIso =
+      computed.settled_at === "SET_NOW"
+        ? placedAtIso
+        : null;
 
     const { data: ticket, error: ticketErr } = await supabase
       .from("tickets")
@@ -230,11 +436,13 @@ export default function NewTicketPage() {
         user_id: user.id,
         ticket_type: ticketType,
         stake: stakeNum,
-        book: book || null,
+        book: book.trim() === "" ? null : book.trim(),
         league: leagueToStore,
         status: statusToStore,
         placed_at: placedAtIso,
-        payout: actualPayout === "" ? null : Number(actualPayout),
+        payout: computed.payout,
+        profit: computed.profit,
+        settled_at: settledAtIso,
       })
       .select("id")
       .single();
@@ -245,14 +453,23 @@ export default function NewTicketPage() {
       return;
     }
 
-    const { error: legsErr } = await supabase.from("legs").insert(
-      legs.map((l) => ({
-        ticket_id: ticket.id,
-        selection: l.selection,
-        american_odds: Number(l.american_odds),
-        status: l.status,
-      }))
-    );
+    // ✅ Single: leg status mirrors ticket status (no separate editing)
+    const legsToInsert =
+      ticketType === "single"
+        ? legs.map((l) => ({
+            ticket_id: ticket.id,
+            selection: l.selection,
+            american_odds: Number(l.american_odds),
+            status: mapTicketStatusToLegStatus(statusToStore),
+          }))
+        : legs.map((l) => ({
+            ticket_id: ticket.id,
+            selection: l.selection,
+            american_odds: Number(l.american_odds),
+            status: l.status,
+          }));
+
+    const { error: legsErr } = await supabase.from("legs").insert(legsToInsert);
 
     if (legsErr) {
       console.error(legsErr);
@@ -270,6 +487,10 @@ export default function NewTicketPage() {
         <div>
           <div style={{ fontSize: 12, opacity: 0.7 }}>Create</div>
           <h1 style={{ margin: 0, fontSize: 28 }}>New Bet</h1>
+          <div style={{ marginTop: 6, fontSize: 12, opacity: 0.7 }}>
+            Default To Win:{" "}
+            <b>{unitLoading ? "Loading unit…" : `${unitSize.toFixed(2)} (1 Unit)`}</b>
+          </div>
         </div>
         <Link
           href="/"
@@ -300,7 +521,7 @@ export default function NewTicketPage() {
                 const next = e.target.value as "single" | "parlay";
                 setTicketType(next);
                 if (next === "single") {
-                  setLegs([{ selection: "", american_odds: "-110", status: "open" }]);
+                  setLegs([{ selection: "", american_odds: "-110", status: mapTicketStatusToLegStatus(ticketStatus) }]);
                 }
               }}
               style={selectStyle}
@@ -344,6 +565,9 @@ export default function NewTicketPage() {
               placeholder="FanDuel, DK…"
               style={inputStyle}
             />
+            <div style={{ marginTop: 6, fontSize: 12, opacity: 0.7 }}>
+              Default: <b>Bovada</b>
+            </div>
           </div>
 
           {/* ✅ Bet mode toggle */}
@@ -357,8 +581,7 @@ export default function NewTicketPage() {
                   checked={betMode === "risk"}
                   onChange={() => {
                     setBetMode("risk");
-                    // when switching to risk, keep current stake and compute toWin
-                    setToWinFromRisk(betInput);
+                    setToWinFromRisk(betInput === "" ? "0" : betInput);
                   }}
                 />
                 <span style={{ fontWeight: 800 }}>Risk (Stake)</span>
@@ -371,7 +594,6 @@ export default function NewTicketPage() {
                   checked={betMode === "towin"}
                   onChange={() => {
                     setBetMode("towin");
-                    // when switching to toWin, keep current toWin and compute stake
                     setRiskFromToWin(toWinInput === "" ? "0" : toWinInput);
                   }}
                 />
@@ -380,9 +602,13 @@ export default function NewTicketPage() {
 
               <div style={{ marginLeft: "auto", fontSize: 12, opacity: 0.7 }}>
                 {multiplierValid ? (
-                  <>Multiplier: <b>{round2(multiplier).toFixed(2)}</b></>
+                  <>
+                    Multiplier: <b>{round2(multiplier).toFixed(2)}</b>
+                  </>
                 ) : (
-                  <>Multiplier: <b>—</b></>
+                  <>
+                    Multiplier: <b>—</b>
+                  </>
                 )}
               </div>
             </div>
@@ -398,7 +624,7 @@ export default function NewTicketPage() {
               onChange={(e) => {
                 const next = e.target.value;
                 if (betMode === "risk") setToWinFromRisk(next);
-                else setBetInput(next); // allow viewing/editing even if not active
+                else setBetInput(next);
               }}
               style={{
                 ...inputStyle,
@@ -425,6 +651,9 @@ export default function NewTicketPage() {
                 opacity: betMode === "towin" ? 1 : 0.85,
               }}
             />
+            <div style={{ marginTop: 6, fontSize: 12, opacity: 0.7 }}>
+              Tip: set <b>To Win</b> = 1 unit
+            </div>
           </div>
 
           <div style={{ gridColumn: "span 3" }}>
@@ -489,6 +718,12 @@ export default function NewTicketPage() {
           )}
         </div>
 
+        {ticketType === "single" && (
+          <div style={{ marginBottom: 10, fontSize: 12, opacity: 0.7 }}>
+            Single bet: leg status is <b>synced to ticket status</b>.
+          </div>
+        )}
+
         <div style={{ display: "grid", gap: 10 }}>
           {legs.map((leg, idx) => (
             <div
@@ -528,13 +763,9 @@ export default function NewTicketPage() {
                     copy[idx] = { ...copy[idx], american_odds: e.target.value };
                     setLegs(copy);
 
-                    // keep the paired field synced when odds change
-                    // (only when multiplier is valid after this change, which is recalculated via useMemo)
-                    // We'll trigger recompute in a tiny next tick by using current betMode + existing inputs.
-                    // This is safe and avoids useEffect loops.
                     setTimeout(() => {
-                      if (betMode === "risk") setToWinFromRisk(betInput);
-                      else setRiskFromToWin(toWinInput);
+                      if (betMode === "risk") setToWinFromRisk(betInput === "" ? "0" : betInput);
+                      else setRiskFromToWin(toWinInput === "" ? "0" : toWinInput);
                     }, 0);
                   }}
                   style={inputStyle}
@@ -545,17 +776,22 @@ export default function NewTicketPage() {
                 <FieldLabel>Leg Status</FieldLabel>
                 <select
                   value={leg.status}
+                  disabled={ticketType === "single"}
                   onChange={(e) => {
                     const copy = [...legs];
                     copy[idx] = { ...copy[idx], status: e.target.value as any };
                     setLegs(copy);
 
                     setTimeout(() => {
-                      if (betMode === "risk") setToWinFromRisk(betInput);
-                      else setRiskFromToWin(toWinInput);
+                      if (betMode === "risk") setToWinFromRisk(betInput === "" ? "0" : betInput);
+                      else setRiskFromToWin(toWinInput === "" ? "0" : toWinInput);
                     }, 0);
                   }}
-                  style={selectStyle}
+                  style={{
+                    ...selectStyle,
+                    opacity: ticketType === "single" ? 0.6 : 1,
+                    cursor: ticketType === "single" ? "not-allowed" : "pointer",
+                  }}
                 >
                   <option value="open">open</option>
                   <option value="won">won</option>
