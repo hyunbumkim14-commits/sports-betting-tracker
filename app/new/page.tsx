@@ -66,7 +66,7 @@ function mapTicketStatusToLegStatus(s: TicketStatus): LegDraft["status"] {
 }
 
 function FieldLabel({ children }: { children: React.ReactNode }) {
-  return <div className="text-xs font-bold opacity-70">{children}</div>;
+  return <div className="text-[11px] font-semibold text-zinc-600">{children}</div>;
 }
 
 export default function NewTicketPage() {
@@ -78,35 +78,43 @@ export default function NewTicketPage() {
   const [betMode, setBetMode] = useState<"risk" | "towin">("towin");
 
   // store as strings so the user can clear the input without NaN fights
-  const [betInput, setBetInput] = useState<string>(""); // stake / risk
-  const [toWinInput, setToWinInput] = useState<string>(""); // profit target
+  const [betInput, setBetInput] = useState(""); // stake / risk
+  const [toWinInput, setToWinInput] = useState(""); // profit target
 
   // ✅ Default book = Bovada
-  const [book, setBook] = useState<string>("Bovada");
-  const [league, setLeague] = useState<string>("");
+  const [book, setBook] = useState("Bovada");
 
-  const [placedDate, setPlacedDate] = useState<string>(() => todayYyyyMmDd());
+  const [league, setLeague] = useState("");
+  const [placedDate, setPlacedDate] = useState(() => todayYyyyMmDd());
   const [ticketStatus, setTicketStatus] = useState<TicketStatus>("open");
-  const [actualPayout, setActualPayout] = useState<number | "">("");
+  const [actualPayout, setActualPayout] = useState("");
 
   const [legs, setLegs] = useState<LegDraft[]>([
     { selection: "", american_odds: "-110", status: "open" },
   ]);
 
   // Unit seeding (1 unit -> toWin)
-  const [unitLoading, setUnitLoading] = useState<boolean>(true);
-  const [unitSize, setUnitSize] = useState<number>(0);
-  const [seededDefaults, setSeededDefaults] = useState<boolean>(false);
+  const [unitLoading, setUnitLoading] = useState(true);
+  const [unitSize, setUnitSize] = useState(0);
+  const [seededDefaults, setSeededDefaults] = useState(false);
 
   const canAddLeg = ticketType === "parlay";
-  const addLeg = () =>
-    setLegs([...legs, { selection: "", american_odds: "-110", status: "open" }]);
+  const addLeg = () => setLegs([...legs, { selection: "", american_odds: "-110", status: "open" }]);
   const removeLeg = (idx: number) => setLegs(legs.filter((_, i) => i !== idx));
 
+  // ✅ Compact UI tokens
   const inputClass =
-    "h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base";
+    "h-9 w-full rounded-lg border border-zinc-200 bg-white px-2 text-sm outline-none focus:border-zinc-400";
+  const selectClass =
+    "h-9 w-full rounded-lg border border-zinc-200 bg-white px-2 text-sm outline-none focus:border-zinc-400";
   const cardClass =
-    "rounded-2xl border border-zinc-200 bg-white p-4 shadow-[0_1px_0_rgba(0,0,0,0.03)]";
+    "rounded-2xl border border-zinc-200 bg-white p-3 shadow-[0_1px_0_rgba(0,0,0,0.03)]";
+  const smallBtn =
+    "inline-flex h-9 items-center justify-center rounded-lg border border-zinc-200 bg-white px-3 text-sm font-semibold";
+  const primaryBtn =
+    "inline-flex h-9 items-center justify-center rounded-lg bg-black px-4 text-sm font-semibold text-white";
+  const dangerBtn =
+    "inline-flex h-9 items-center justify-center rounded-lg border border-red-200 bg-white px-3 text-sm font-semibold text-red-700";
 
   // ✅ derive decimal multiplier for the ticket (single or parlay)
   const { multiplier, multiplierValid } = useMemo(() => {
@@ -146,23 +154,18 @@ export default function NewTicketPage() {
 
   function setRiskFromToWin(nextToWinStr: string) {
     setToWinInput(nextToWinStr);
-
     const desiredProfit = Number(nextToWinStr);
     if (!multiplierValid || !Number.isFinite(desiredProfit) || desiredProfit < 0) return;
-
     const denom = multiplier - 1;
     if (denom <= 0) return;
-
     const stake = desiredProfit / denom;
     setBetInput(String(round2(stake)));
   }
 
   function setToWinFromRisk(nextRiskStr: string) {
     setBetInput(nextRiskStr);
-
     const stake = Number(nextRiskStr);
     if (!multiplierValid || !Number.isFinite(stake) || stake < 0) return;
-
     const profit = stake * (multiplier - 1);
     setToWinInput(String(round2(profit)));
   }
@@ -170,14 +173,11 @@ export default function NewTicketPage() {
   // ✅ Single: leg status mirrors ticket status
   useEffect(() => {
     if (ticketType !== "single") return;
+
     setLegs((prev) => {
       if (prev.length !== 1)
         return [
-          {
-            selection: "",
-            american_odds: "-110",
-            status: mapTicketStatusToLegStatus(ticketStatus),
-          },
+          { selection: "", american_odds: "-110", status: mapTicketStatusToLegStatus(ticketStatus) },
         ];
       const next = [...prev];
       next[0] = { ...next[0], status: mapTicketStatusToLegStatus(ticketStatus) };
@@ -290,35 +290,34 @@ export default function NewTicketPage() {
     if (pStatus === "open") return { payout: null, profit: null, settled_at: null };
     if (pStatus === "push" || pStatus === "void")
       return { payout: round2(stake), profit: 0, settled_at: "SET_NOW" };
-    if (pStatus === "lost")
-      return { payout: 0, profit: round2(0 - stake), settled_at: "SET_NOW" };
+    if (pStatus === "lost") return { payout: 0, profit: round2(0 - stake), settled_at: "SET_NOW" };
     if (pStatus === "won") {
       const winMultiplier = legs.reduce((acc, l) => {
         if (l.status === "push" || l.status === "void") return acc * 1;
         const dec = americanToDecimal(Number(l.american_odds));
         return acc * dec;
       }, 1);
+
       const payout = round2(stake * winMultiplier);
       const profit = round2(payout - stake);
       return { payout, profit, settled_at: "SET_NOW" };
     }
+
     return { payout: null, profit: null, settled_at: null };
   }
 
   async function save() {
     const user = (await supabase.auth.getUser()).data.user;
     if (!user) {
-      alert("Not logged in. Go to /login.");
+      alert("Not logged in.\nGo to /login.");
       return;
     }
 
     if (!placedDate) return alert("Please select a date.");
     if (!league.trim()) return alert("Please select a league.");
     if (legs.some((l) => !l.selection.trim())) return alert("Please fill all selections.");
-
     if (ticketType === "single" && legs.length !== 1) return alert("Single must have exactly 1 leg.");
     if (ticketType === "parlay" && legs.length < 2) return alert("Parlay must have 2+ legs.");
-
     if (
       legs.some((l) => {
         const n = Number(l.american_odds);
@@ -335,7 +334,6 @@ export default function NewTicketPage() {
       ticketType === "parlay" ? ((derivedParlayStatus as any) ?? "open") : ticketStatus;
 
     const leagueToStore = league.trim() === "" ? null : league.trim();
-
     const payoutOverride = actualPayout === "" ? null : Number(actualPayout);
 
     const computed = computePayoutProfitForCreate({
@@ -388,341 +386,326 @@ export default function NewTicketPage() {
           }));
 
     const { error: legsErr } = await supabase.from("legs").insert(legsToInsert);
-
     if (legsErr) {
       console.error(legsErr);
       alert("Ticket saved, but legs failed to save.");
       return;
     }
 
-    // ✅ After save: go back to dashboard
     router.push("/");
   }
 
   return (
-    <div className="mx-auto w-full max-w-5xl px-4 py-5 sm:px-6">
+    <div className="min-h-screen bg-zinc-50">
       {/* Header */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <div className="text-xs opacity-70">Create</div>
-          <h1 className="text-2xl font-black tracking-tight sm:text-3xl">New Bet</h1>
-          <div className="mt-1 text-xs opacity-70">
-            Default To Win: <b>{unitLoading ? "Loading unit…" : `${unitSize.toFixed(2)} (1 Unit)`}</b>
+      <div className="mx-auto max-w-3xl px-4 pt-5">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="text-xs font-semibold text-zinc-500">Create</div>
+            <h1 className="text-xl font-bold tracking-tight">New Bet</h1>
+            <div className="mt-1 text-xs text-zinc-600">
+              Default To Win:{" "}
+              {unitLoading ? "Loading unit…" : `${unitSize.toFixed(2)} (1 Unit)`}
+            </div>
           </div>
+
+          <Link href="/" className="text-sm font-semibold text-zinc-700 hover:underline">
+            Home
+          </Link>
         </div>
 
-        <Link
-          href="/"
-          className="inline-flex h-11 items-center justify-center rounded-xl border border-zinc-200 bg-white px-4 font-bold"
-        >
-          Home
-        </Link>
-      </div>
+        {/* Ticket Info */}
+        <div className={`mt-4 ${cardClass}`}>
+          <div className="mb-2 text-sm font-bold">Ticket</div>
 
-      {/* Ticket Info */}
-      <div className={`rounded-2xl border border-zinc-200 bg-white p-4 shadow-[0_1px_0_rgba(0,0,0,0.03)] mt-4`}>
-        <div className="mb-3 font-black">Ticket</div>
+          <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+            <div className="col-span-1">
+              <FieldLabel>Type</FieldLabel>
+              <select
+                value={ticketType}
+                onChange={(e) => {
+                  const next = e.target.value as "single" | "parlay";
+                  setTicketType(next);
+                  if (next === "single") {
+                    setLegs([
+                      {
+                        selection: "",
+                        american_odds: "-110",
+                        status: mapTicketStatusToLegStatus(ticketStatus),
+                      },
+                    ]);
+                  }
+                }}
+                className={selectClass}
+              >
+                <option value="single">Single</option>
+                <option value="parlay">Parlay</option>
+              </select>
+            </div>
 
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="grid gap-1.5">
-            <FieldLabel>Type</FieldLabel>
-            <select
-              value={ticketType}
-              onChange={(e) => {
-                const next = e.target.value as "single" | "parlay";
-                setTicketType(next);
-                if (next === "single") {
-                  setLegs([
-                    {
-                      selection: "",
-                      american_odds: "-110",
-                      status: mapTicketStatusToLegStatus(ticketStatus),
-                    },
-                  ]);
-                }
-              }}
-              className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
-            >
-              <option value="single">Single</option>
-              <option value="parlay">Parlay</option>
-            </select>
-          </div>
+            <div className="col-span-1 md:col-span-2">
+              <FieldLabel>League</FieldLabel>
+              <input
+                value={league}
+                onChange={(e) => setLeague(e.target.value)}
+                placeholder="Select or type…"
+                className={inputClass}
+                list="league_options"
+              />
+              <datalist id="league_options">
+                {LEAGUE_OPTIONS.map((l) => (
+                  <option key={l} value={l} />
+                ))}
+              </datalist>
+            </div>
 
-          <div className="grid gap-1.5">
-            <FieldLabel>League</FieldLabel>
-            <input
-              list="league-options"
-              value={league}
-              onChange={(e) => setLeague(e.target.value)}
-              placeholder="Select or type…"
-              className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
-            />
-            <datalist id="league-options">
-              {LEAGUE_OPTIONS.map((l) => (
-                <option key={l} value={l} />
-              ))}
-            </datalist>
-          </div>
+            <div className="col-span-1">
+              <FieldLabel>Date</FieldLabel>
+              <input
+                type="date"
+                value={placedDate}
+                onChange={(e) => setPlacedDate(e.target.value)}
+                className={inputClass}
+              />
+            </div>
 
-          <div className="grid gap-1.5">
-            <FieldLabel>Date</FieldLabel>
-            <input
-              type="date"
-              value={placedDate}
-              onChange={(e) => setPlacedDate(e.target.value)}
-              className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
-            />
-          </div>
+            <div className="col-span-1 md:col-span-2">
+              <FieldLabel>Book</FieldLabel>
+              <input
+                value={book}
+                onChange={(e) => setBook(e.target.value)}
+                placeholder="FanDuel, DK…"
+                className={inputClass}
+              />
+              <div className="mt-1 text-[11px] text-zinc-500">Default: Bovada</div>
+            </div>
 
-          <div className="grid gap-1.5">
-            <FieldLabel>Book</FieldLabel>
-            <input
-              value={book}
-              onChange={(e) => setBook(e.target.value)}
-              placeholder="FanDuel, DK…"
-              className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
-            />
-            <div className="text-xs opacity-70">
-              Default: <b>Bovada</b>
+            <div className="col-span-1 md:col-span-2">
+              <FieldLabel>Status</FieldLabel>
+              <select
+                value={ticketStatus}
+                onChange={(e) => setTicketStatus(e.target.value as any)}
+                disabled={ticketType === "parlay"}
+                className={selectClass}
+                style={{
+                  opacity: ticketType === "parlay" ? 0.65 : 1,
+                  cursor: ticketType === "parlay" ? "not-allowed" : "pointer",
+                }}
+              >
+                <option value="open">open</option>
+                <option value="won">won</option>
+                <option value="lost">lost</option>
+                <option value="push">push</option>
+                <option value="void">void</option>
+                <option value="partial">partial</option>
+              </select>
+
+              {ticketType === "parlay" && (
+                <div className="mt-1 text-[11px] text-zinc-600">
+                  Derived: <span className="font-semibold">{derivedParlayStatus}</span>
+                </div>
+              )}
             </div>
           </div>
 
           {/* Bet Mode */}
-          <div className="grid gap-1.5 sm:col-span-2 lg:col-span-2">
-            <FieldLabel>Bet input mode</FieldLabel>
-            <div className="flex flex-col gap-2 rounded-xl border border-zinc-200 bg-white p-3 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
-                <label className="flex items-center gap-2">
+          <div className="mt-3 border-t border-zinc-100 pt-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="text-sm font-bold">Bet</div>
+              <div className="flex items-center gap-3 text-xs font-semibold text-zinc-600">
+                <label className="flex items-center gap-1">
                   <input
                     type="radio"
-                    name="betMode"
                     checked={betMode === "risk"}
                     onChange={() => {
                       setBetMode("risk");
                       setToWinFromRisk(betInput === "" ? "0" : betInput);
                     }}
                   />
-                  <span className="font-bold">Risk (Stake)</span>
+                  Risk
                 </label>
-
-                <label className="flex items-center gap-2">
+                <label className="flex items-center gap-1">
                   <input
                     type="radio"
-                    name="betMode"
                     checked={betMode === "towin"}
                     onChange={() => {
                       setBetMode("towin");
                       setRiskFromToWin(toWinInput === "" ? "0" : toWinInput);
                     }}
                   />
-                  <span className="font-bold">To Win (Profit)</span>
+                  To Win
                 </label>
               </div>
+            </div>
 
-              <div className="text-xs opacity-70">
-                Multiplier: <b>{multiplierValid ? round2(multiplier).toFixed(2) : "—"}</b>
+            <div className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-4">
+              <div className="col-span-2 md:col-span-1">
+                <FieldLabel>Multiplier</FieldLabel>
+                <div className="h-9 rounded-lg border border-zinc-200 bg-zinc-50 px-2 text-sm leading-9 text-zinc-700">
+                  {multiplierValid ? round2(multiplier).toFixed(2) : "—"}
+                </div>
+              </div>
+
+              <div className="col-span-1">
+                <FieldLabel>Stake (Risk)</FieldLabel>
+                <input
+                  value={betInput}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    if (betMode === "risk") setToWinFromRisk(next);
+                    else setBetInput(next);
+                  }}
+                  className={inputClass}
+                  style={{ opacity: betMode === "risk" ? 1 : 0.85 }}
+                />
+              </div>
+
+              <div className="col-span-1">
+                <FieldLabel>To Win (Profit)</FieldLabel>
+                <input
+                  value={toWinInput}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    if (betMode === "towin") setRiskFromToWin(next);
+                    else setToWinInput(next);
+                  }}
+                  placeholder={betMode === "towin" ? "" : "Auto (switch to To Win)"}
+                  className={inputClass}
+                  style={{ opacity: betMode === "towin" ? 1 : 0.85 }}
+                />
+                <div className="mt-1 text-[11px] text-zinc-500">Tip: set To Win = 1 unit</div>
+              </div>
+
+              <div className="col-span-2 md:col-span-1">
+                <FieldLabel>Actual payout (optional)</FieldLabel>
+                <input
+                  value={actualPayout}
+                  onChange={(e) =>
+                    setActualPayout(e.target.value === "" ? "" : String(Number(e.target.value)))
+                  }
+                  placeholder="Total return incl. bet"
+                  className={inputClass}
+                />
               </div>
             </div>
           </div>
+        </div>
 
-          <div className="grid gap-1.5">
-            <FieldLabel>Stake (Risk)</FieldLabel>
-            <input
-              type="number"
-              value={betInput}
-              min={0}
-              step="0.01"
-              onChange={(e) => {
-                const next = e.target.value;
-                if (betMode === "risk") setToWinFromRisk(next);
-                else setBetInput(next);
-              }}
-              className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
-              style={{ opacity: betMode === "risk" ? 1 : 0.85 }}
-            />
-          </div>
-
-          <div className="grid gap-1.5">
-            <FieldLabel>To Win (Profit)</FieldLabel>
-            <input
-              type="number"
-              value={toWinInput}
-              min={0}
-              step="0.01"
-              onChange={(e) => {
-                const next = e.target.value;
-                if (betMode === "towin") setRiskFromToWin(next);
-                else setToWinInput(next);
-              }}
-              placeholder={betMode === "towin" ? "" : "Auto (switch to To Win)"}
-              className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
-              style={{ opacity: betMode === "towin" ? 1 : 0.85 }}
-            />
-            <div className="text-xs opacity-70">
-              Tip: set <b>To Win</b> = 1 unit
-            </div>
-          </div>
-
-          <div className="grid gap-1.5">
-            <FieldLabel>Status</FieldLabel>
-            <select
-              value={ticketStatus}
-              onChange={(e) => setTicketStatus(e.target.value as any)}
-              disabled={ticketType === "parlay"}
-              className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
-              style={{
-                opacity: ticketType === "parlay" ? 0.65 : 1,
-                cursor: ticketType === "parlay" ? "not-allowed" : "pointer",
-              }}
-            >
-              <option value="open">open</option>
-              <option value="won">won</option>
-              <option value="lost">lost</option>
-              <option value="push">push</option>
-              <option value="void">void</option>
-              <option value="partial">partial</option>
-            </select>
-            {ticketType === "parlay" && (
-              <div className="text-xs opacity-70">
-                Derived: <b>{derivedParlayStatus}</b>
-              </div>
+        {/* Legs */}
+        <div className={`mt-3 ${cardClass}`}>
+          <div className="flex items-center justify-between">
+            <div className="text-sm font-bold">Legs</div>
+            {canAddLeg && (
+              <button type="button" onClick={addLeg} className={smallBtn}>
+                + Add Leg
+              </button>
             )}
           </div>
 
-          <div className="grid gap-1.5 sm:col-span-2 lg:col-span-2">
-            <FieldLabel>Actual payout (optional)</FieldLabel>
-            <input
-              type="number"
-              value={actualPayout}
-              min={0}
-              step="0.01"
-              onChange={(e) => setActualPayout(e.target.value === "" ? "" : Number(e.target.value))}
-              placeholder="Total return incl. bet"
-              className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
-            />
-          </div>
-        </div>
-      </div>
-
-      {/* Legs */}
-      <div className={`rounded-2xl border border-zinc-200 bg-white p-4 shadow-[0_1px_0_rgba(0,0,0,0.03)] mt-4`}>
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="font-black">Legs</div>
-          {canAddLeg && (
-            <button
-              onClick={addLeg}
-              className="inline-flex h-11 items-center justify-center rounded-xl border border-zinc-200 bg-white px-4 font-bold"
-            >
-              + Add Leg
-            </button>
+          {ticketType === "single" && (
+            <div className="mt-1 text-[11px] text-zinc-600">
+              Single bet: leg status is synced to ticket status.
+            </div>
           )}
-        </div>
 
-        {ticketType === "single" && (
-          <div className="mt-2 text-xs opacity-70">
-            Single bet: leg status is <b>synced to ticket status</b>.
-          </div>
-        )}
+          <div className="mt-2 space-y-2">
+            {legs.map((leg, idx) => (
+              <div
+                key={idx}
+                className="rounded-xl border border-zinc-200 bg-white p-2"
+              >
+                <div className="grid grid-cols-12 gap-2">
+                  <div className="col-span-12 md:col-span-7">
+                    <FieldLabel>
+                      {ticketType === "single" ? "Selection" : `Leg ${idx + 1} Selection`}
+                    </FieldLabel>
+                    <input
+                      value={leg.selection}
+                      onChange={(e) => {
+                        const copy = [...legs];
+                        copy[idx] = { ...copy[idx], selection: e.target.value };
+                        setLegs(copy);
+                      }}
+                      placeholder={ticketType === "single" ? "e.g. Lakers -2.5" : "Leg selection"}
+                      className={inputClass}
+                    />
+                  </div>
 
-        <div className="mt-3 grid gap-3">
-          {legs.map((leg, idx) => (
-            <div key={idx} className="rounded-2xl border border-zinc-200 bg-white p-3">
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-4 sm:items-end">
-                <div className="sm:col-span-2 grid gap-1.5">
-                  <FieldLabel>{ticketType === "single" ? "Selection" : `Leg ${idx + 1} Selection`}</FieldLabel>
-                  <input
-                    value={leg.selection}
-                    onChange={(e) => {
-                      const copy = [...legs];
-                      copy[idx] = { ...copy[idx], selection: e.target.value };
-                      setLegs(copy);
-                    }}
-                    placeholder={ticketType === "single" ? "e.g. Lakers -2.5" : "Leg selection"}
-                    className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
-                  />
-                </div>
+                  <div className="col-span-6 md:col-span-2">
+                    <FieldLabel>Odds</FieldLabel>
+                    <input
+                      value={leg.american_odds}
+                      onChange={(e) => {
+                        const copy = [...legs];
+                        copy[idx] = { ...copy[idx], american_odds: e.target.value };
+                        setLegs(copy);
 
-                <div className="grid gap-1.5">
-                  <FieldLabel>Odds</FieldLabel>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    value={leg.american_odds}
-                    onChange={(e) => {
-                      const copy = [...legs];
-                      copy[idx] = { ...copy[idx], american_odds: e.target.value };
-                      setLegs(copy);
+                        setTimeout(() => {
+                          if (betMode === "risk") setToWinFromRisk(betInput === "" ? "0" : betInput);
+                          else setRiskFromToWin(toWinInput === "" ? "0" : toWinInput);
+                        }, 0);
+                      }}
+                      className={inputClass}
+                    />
+                  </div>
 
-                      setTimeout(() => {
-                        if (betMode === "risk") setToWinFromRisk(betInput === "" ? "0" : betInput);
-                        else setRiskFromToWin(toWinInput === "" ? "0" : toWinInput);
-                      }, 0);
-                    }}
-                    className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
-                  />
-                </div>
+                  <div className="col-span-6 md:col-span-2">
+                    <FieldLabel>Leg Status</FieldLabel>
+                    <select
+                      value={leg.status}
+                      onChange={(e) => {
+                        const copy = [...legs];
+                        copy[idx] = { ...copy[idx], status: e.target.value as any };
+                        setLegs(copy);
 
-                <div className="grid gap-1.5">
-                  <FieldLabel>Leg Status</FieldLabel>
-                  <select
-                    value={leg.status}
-                    disabled={ticketType === "single"}
-                    onChange={(e) => {
-                      const copy = [...legs];
-                      copy[idx] = { ...copy[idx], status: e.target.value as any };
-                      setLegs(copy);
-
-                      setTimeout(() => {
-                        if (betMode === "risk") setToWinFromRisk(betInput === "" ? "0" : betInput);
-                        else setRiskFromToWin(toWinInput === "" ? "0" : toWinInput);
-                      }, 0);
-                    }}
-                    className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
-                    style={{
-                      opacity: ticketType === "single" ? 0.65 : 1,
-                      cursor: ticketType === "single" ? "not-allowed" : "pointer",
-                    }}
-                  >
-                    <option value="open">open</option>
-                    <option value="won">won</option>
-                    <option value="lost">lost</option>
-                    <option value="push">push</option>
-                    <option value="void">void</option>
-                  </select>
-                </div>
-
-                <div className="sm:col-span-4 flex justify-end">
-                  {canAddLeg && legs.length > 2 ? (
-                    <button
-                      onClick={() => removeLeg(idx)}
-                      className="inline-flex h-11 items-center justify-center rounded-xl border border-red-200 bg-white px-4 font-bold text-red-700"
+                        setTimeout(() => {
+                          if (betMode === "risk") setToWinFromRisk(betInput === "" ? "0" : betInput);
+                          else setRiskFromToWin(toWinInput === "" ? "0" : toWinInput);
+                        }, 0);
+                      }}
+                      className={selectClass}
+                      style={{
+                        opacity: ticketType === "single" ? 0.65 : 1,
+                        cursor: ticketType === "single" ? "not-allowed" : "pointer",
+                      }}
+                      disabled={ticketType === "single"}
                     >
-                      Remove
-                    </button>
-                  ) : null}
+                      <option value="open">open</option>
+                      <option value="won">won</option>
+                      <option value="lost">lost</option>
+                      <option value="push">push</option>
+                      <option value="void">void</option>
+                    </select>
+                  </div>
+
+                  <div className="col-span-12 md:col-span-1 md:flex md:items-end">
+                    {canAddLeg && legs.length > 2 ? (
+                      <button type="button" onClick={() => removeLeg(idx)} className={dangerBtn}>
+                        Remove
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
+
+        {/* bottom padding so sticky bar doesn't cover content */}
+        <div className="h-20" />
       </div>
 
-      {/* Sticky actions */}
-      <div className="sticky bottom-0 mt-4 border-t border-zinc-200 bg-white/90 py-3 backdrop-blur">
-        <div className="mx-auto flex w-full max-w-5xl flex-col gap-2 px-0 sm:flex-row sm:justify-end sm:gap-3">
-          <Link
-            href="/"
-            className="inline-flex h-11 items-center justify-center rounded-xl border border-zinc-200 bg-white px-4 font-bold"
-          >
-            Cancel
-          </Link>
-
-          <button
-            onClick={save}
-            className="inline-flex h-11 items-center justify-center rounded-xl border border-zinc-900 bg-zinc-900 px-4 font-black text-white"
-          >
-            Save
-          </button>
+      {/* Sticky actions (compact) */}
+      <div className="sticky bottom-0 border-t border-zinc-200 bg-white/80 backdrop-blur">
+        <div className="mx-auto max-w-3xl px-4 py-2">
+          <div className="flex items-center justify-end gap-2">
+            <button type="button" onClick={() => router.push("/")} className={smallBtn}>
+              Cancel
+            </button>
+            <button type="button" onClick={save} className={primaryBtn}>
+              Save
+            </button>
+          </div>
         </div>
       </div>
     </div>

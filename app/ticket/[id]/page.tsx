@@ -67,7 +67,7 @@ function profitColor(n: number) {
 }
 
 function FieldLabel({ children }: { children: React.ReactNode }) {
-  return <div className="text-xs font-bold opacity-70">{children}</div>;
+  return <div className="text-[11px] font-semibold text-zinc-600">{children}</div>;
 }
 
 function mapTicketStatusToLegStatus(s: TicketStatus): Leg["status"] {
@@ -87,23 +87,30 @@ export default function TicketPage() {
   const [ticket, setTicket] = useState<Ticket | null>(null);
   const [legs, setLegs] = useState<Leg[]>([]);
 
-  const [placedDate, setPlacedDate] = useState<string>("");
-  const [book, setBook] = useState<string>("");
-  const [league, setLeague] = useState<string>("");
+  const [placedDate, setPlacedDate] = useState("");
+  const [book, setBook] = useState("");
+  const [league, setLeague] = useState("");
 
   const [betMode, setBetMode] = useState<"risk" | "towin">("risk");
-  const [betInput, setBetInput] = useState<string>("0");
-  const [toWinInput, setToWinInput] = useState<string>("");
+  const [betInput, setBetInput] = useState("0");
+  const [toWinInput, setToWinInput] = useState("");
 
   const [singleStatus, setSingleStatus] = useState<TicketStatus>("open");
 
-  const [payoutInput, setPayoutInput] = useState<string>("");
-  const [payoutEdited, setPayoutEdited] = useState<boolean>(false);
+  const [payoutInput, setPayoutInput] = useState("");
+  const [payoutEdited, setPayoutEdited] = useState(false);
 
+  // ✅ Compact UI tokens
   const inputClass =
-    "h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base";
+    "h-9 w-full rounded-lg border border-zinc-200 bg-white px-2 text-sm outline-none focus:border-zinc-400";
   const cardClass =
-    "rounded-2xl border border-zinc-200 bg-white p-4 shadow-[0_1px_0_rgba(0,0,0,0.03)]";
+    "rounded-2xl border border-zinc-200 bg-white p-3 shadow-[0_1px_0_rgba(0,0,0,0.03)]";
+  const smallBtn =
+    "inline-flex h-9 items-center justify-center rounded-lg border border-zinc-200 bg-white px-3 text-sm font-semibold";
+  const primaryBtn =
+    "inline-flex h-9 items-center justify-center rounded-lg bg-black px-4 text-sm font-semibold text-white";
+  const dangerBtn =
+    "inline-flex h-9 items-center justify-center rounded-lg border border-red-200 bg-white px-3 text-sm font-semibold text-red-700";
 
   useEffect(() => {
     async function load() {
@@ -136,17 +143,13 @@ export default function TicketPage() {
       }
 
       const ticketRow = t as Ticket;
-
       setTicket(ticketRow);
       setLegs((l ?? []) as Leg[]);
-
       setPlacedDate(isoToYyyyMmDd(ticketRow.placed_at));
       setBook(ticketRow.book ?? "");
       setLeague(ticketRow.league ?? "");
-
       setBetInput(String(ticketRow.stake ?? 0));
       setSingleStatus(ticketRow.status);
-
       setPayoutInput(ticketRow.payout === null ? "" : String(ticketRow.payout));
       setPayoutEdited(false);
 
@@ -156,19 +159,14 @@ export default function TicketPage() {
     if (id) load();
   }, [id, router]);
 
-  const derivedParlayStatus = useMemo<ParlayStatus | null>(() => {
+  const derivedParlayStatus = useMemo(() => {
     if (!ticket || ticket.ticket_type !== "parlay") return null;
-
     if (legs.some((l) => l.status === "lost")) return "lost";
-
     const allSettled = legs.every((l) => l.status !== "open");
     if (!allSettled) return "open";
-
     const allVoidOrPush = legs.every((l) => l.status === "void" || l.status === "push");
     if (allVoidOrPush) return "push";
-
     if (legs.some((l) => l.status === "won")) return "won";
-
     return "push";
   }, [ticket, legs]);
 
@@ -206,23 +204,18 @@ export default function TicketPage() {
 
   function setToWinFromRisk(nextRiskStr: string) {
     setBetInput(nextRiskStr);
-
     const stake = Number(nextRiskStr);
     if (!multiplierValid || !Number.isFinite(stake) || stake < 0) return;
-
     const profit = stake * (multiplier - 1);
     setToWinInput(String(round2(profit)));
   }
 
   function setRiskFromToWin(nextToWinStr: string) {
     setToWinInput(nextToWinStr);
-
     const desiredProfit = Number(nextToWinStr);
     if (!multiplierValid || !Number.isFinite(desiredProfit) || desiredProfit < 0) return;
-
     const denom = multiplier - 1;
     if (denom <= 0) return;
-
     const stake = desiredProfit / denom;
     setBetInput(String(round2(stake)));
   }
@@ -257,14 +250,13 @@ export default function TicketPage() {
       if (status === "push" || status === "void") return { payout: round2(stakeNum), profit: 0 };
       if (legs.length !== 1) return { payout: null, profit: null };
       if (status === "lost") return { payout: 0, profit: round2(0 - stakeNum) };
-
       const dec = americanToDecimal(legs[0].american_odds);
       const payout = round2(stakeNum * dec);
       const profit = round2(payout - stakeNum);
       return { payout, profit };
     }
 
-    const pStatus: ParlayStatus = derivedParlayStatus ?? "open";
+    const pStatus: ParlayStatus = (derivedParlayStatus ?? "open") as ParlayStatus;
     if (pStatus === "open") return { payout: null, profit: null };
     if (pStatus === "push" || pStatus === "void") return { payout: round2(stakeNum), profit: 0 };
     if (pStatus === "lost") return { payout: 0, profit: round2(0 - stakeNum) };
@@ -284,7 +276,6 @@ export default function TicketPage() {
     if (!ticket) return;
 
     if (!placedDate) return alert("Please select a date.");
-
     const stake = Number(betInput);
     if (!Number.isFinite(stake) || stake <= 0) return alert("Please enter a valid bet amount.");
 
@@ -292,10 +283,9 @@ export default function TicketPage() {
     const leagueToStore = league.trim() === "" ? null : league.trim();
 
     const statusToStore: TicketStatus =
-      ticket.ticket_type === "parlay" ? (derivedParlayStatus ?? "open") : singleStatus;
+      ticket.ticket_type === "parlay" ? ((derivedParlayStatus ?? "open") as any) : singleStatus;
 
     const { payout, profit } = computedPayoutProfit;
-
     const settledAtIso = statusToStore === "open" || statusToStore === "partial" ? null : placedAtIso;
 
     const { error } = await supabase
@@ -368,39 +358,33 @@ export default function TicketPage() {
     router.refresh();
   }
 
-  if (loading) return <div className="px-4 py-6">Loading…</div>;
-  if (!ticket) return <div className="px-4 py-6">Not found.</div>;
+  if (loading) return <div className="p-4 text-sm text-zinc-600">Loading…</div>;
+  if (!ticket) return <div className="p-4 text-sm text-zinc-600">Not found.</div>;
 
   return (
-    <div className="mx-auto w-full max-w-5xl px-4 py-5 sm:px-6">
-      {/* Header */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <div className="text-xs opacity-70">Ticket</div>
-          <h1 className="text-2xl font-black tracking-tight sm:text-3xl">
-            {ticket.league ?? "—"} • {ticket.ticket_type.toUpperCase()}
-          </h1>
-          <div className="mt-1 text-xs opacity-70">
-            ID:{" "}
-            <span className="font-mono">{ticket.id}</span>
+    <div className="min-h-screen bg-zinc-50">
+      <div className="mx-auto max-w-3xl px-4 pt-5">
+        {/* Header */}
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="text-xs font-semibold text-zinc-500">Ticket</div>
+            <h1 className="text-xl font-bold tracking-tight">
+              {ticket.league ?? "—"} • {ticket.ticket_type.toUpperCase()}
+            </h1>
+            <div className="mt-1 text-[11px] text-zinc-600">ID: {ticket.id}</div>
           </div>
+
+          <Link href="/" className="text-sm font-semibold text-zinc-700 hover:underline">
+            Home
+          </Link>
         </div>
 
-        <Link
-          href="/"
-          className="inline-flex h-11 items-center justify-center rounded-xl border border-zinc-200 bg-white px-4 font-bold"
-        >
-          Home
-        </Link>
-      </div>
-
-      {/* Summary */}
-      <div className={`${cardClass} mt-4`}>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:items-end">
-          <div>
-            <div className="text-xs opacity-70">Computed Profit</div>
+        {/* Summary */}
+        <div className="mt-4 grid grid-cols-2 gap-2">
+          <div className={cardClass}>
+            <div className="text-[11px] font-semibold text-zinc-600">Computed Profit</div>
             <div
-              className="mt-1 text-2xl font-black"
+              className="mt-1 text-lg font-bold"
               style={{
                 color:
                   computedPayoutProfit.profit === null
@@ -412,258 +396,242 @@ export default function TicketPage() {
             </div>
           </div>
 
-          <div>
-            <div className="text-xs opacity-70">Computed Payout</div>
-            <div className="mt-1 text-2xl font-black">
+          <div className={cardClass}>
+            <div className="text-[11px] font-semibold text-zinc-600">Computed Payout</div>
+            <div className="mt-1 text-lg font-bold text-zinc-900">
               {computedPayoutProfit.payout === null ? "—" : computedPayoutProfit.payout.toFixed(2)}
             </div>
           </div>
-
-          {ticket.ticket_type === "single" && (
-            <div className="text-xs opacity-70 sm:text-right">
-              Single: leg status mirrors ticket status
-            </div>
-          )}
         </div>
-      </div>
 
-      {/* Details */}
-      <div className={`${cardClass} mt-4`}>
-        <div className="mb-3 font-black">Details</div>
-
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="grid gap-1.5">
-            <FieldLabel>Type</FieldLabel>
-            <input value={ticket.ticket_type} disabled className={inputClass + " opacity-70"} />
+        {ticket.ticket_type === "single" && (
+          <div className="mt-2 text-[11px] text-zinc-600">
+            Single: leg status mirrors ticket status
           </div>
+        )}
 
-          <div className="grid gap-1.5">
-            <FieldLabel>League</FieldLabel>
-            <input
-              list="league-options"
-              value={league}
-              onChange={(e) => setLeague(e.target.value)}
-              placeholder="Select or type…"
-              className={inputClass}
-            />
-            <datalist id="league-options">
-              {LEAGUE_OPTIONS.map((l) => (
-                <option key={l} value={l} />
-              ))}
-            </datalist>
-          </div>
+        {/* Details */}
+        <div className={`mt-3 ${cardClass}`}>
+          <div className="mb-2 text-sm font-bold">Details</div>
 
-          <div className="grid gap-1.5">
-            <FieldLabel>Date</FieldLabel>
-            <input
-              type="date"
-              value={placedDate}
-              onChange={(e) => setPlacedDate(e.target.value)}
-              className={inputClass}
-            />
-          </div>
+          <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+            <div className="col-span-1">
+              <FieldLabel>Type</FieldLabel>
+              <div className="h-9 rounded-lg border border-zinc-200 bg-zinc-50 px-2 text-sm leading-9 text-zinc-700">
+                {ticket.ticket_type}
+              </div>
+            </div>
 
-          <div className="grid gap-1.5">
-            <FieldLabel>Book</FieldLabel>
-            <input
-              value={book}
-              onChange={(e) => setBook(e.target.value)}
-              placeholder="FanDuel, DK…"
-              className={inputClass}
-            />
-          </div>
+            <div className="col-span-1 md:col-span-2">
+              <FieldLabel>League</FieldLabel>
+              <input
+                value={league}
+                onChange={(e) => setLeague(e.target.value)}
+                placeholder="Select or type…"
+                className={inputClass}
+                list="league_options"
+              />
+              <datalist id="league_options">
+                {LEAGUE_OPTIONS.map((l) => (
+                  <option key={l} value={l} />
+                ))}
+              </datalist>
+            </div>
 
-          {/* Bet Mode */}
-          <div className="grid gap-1.5 sm:col-span-2 lg:col-span-2">
-            <FieldLabel>Bet input mode</FieldLabel>
-            <div className="flex flex-col gap-2 rounded-xl border border-zinc-200 bg-white p-3 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
-                <label className="flex items-center gap-2">
+            <div className="col-span-1">
+              <FieldLabel>Date</FieldLabel>
+              <input
+                type="date"
+                value={placedDate}
+                onChange={(e) => setPlacedDate(e.target.value)}
+                className={inputClass}
+              />
+            </div>
+
+            <div className="col-span-1 md:col-span-2">
+              <FieldLabel>Book</FieldLabel>
+              <input
+                value={book}
+                onChange={(e) => setBook(e.target.value)}
+                placeholder="FanDuel, DK…"
+                className={inputClass}
+              />
+            </div>
+
+            {/* Bet mode */}
+            <div className="col-span-2 md:col-span-2">
+              <FieldLabel>Bet input mode</FieldLabel>
+              <div className="flex h-9 items-center gap-3 rounded-lg border border-zinc-200 bg-white px-2 text-xs font-semibold text-zinc-700">
+                <label className="flex items-center gap-1">
                   <input
                     type="radio"
-                    name="betMode"
                     checked={betMode === "risk"}
                     onChange={() => {
                       setBetMode("risk");
                       setToWinFromRisk(betInput);
                     }}
                   />
-                  <span className="font-bold">Risk (Stake)</span>
+                  Risk
                 </label>
-
-                <label className="flex items-center gap-2">
+                <label className="flex items-center gap-1">
                   <input
                     type="radio"
-                    name="betMode"
                     checked={betMode === "towin"}
                     onChange={() => {
                       setBetMode("towin");
                       setRiskFromToWin(toWinInput === "" ? "0" : toWinInput);
                     }}
                   />
-                  <span className="font-bold">To Win (Profit)</span>
+                  To Win
                 </label>
-              </div>
 
-              <div className="text-xs opacity-70">
-                Multiplier: <b>{multiplierValid ? round2(multiplier).toFixed(2) : "—"}</b>
+                <div className="ml-auto text-[11px] text-zinc-600">
+                  Mult: {multiplierValid ? round2(multiplier).toFixed(2) : "—"}
+                </div>
               </div>
             </div>
-          </div>
 
-          <div className="grid gap-1.5">
-            <FieldLabel>Stake (Risk)</FieldLabel>
-            <input
-              type="number"
-              value={betInput}
-              min={0}
-              step="0.01"
-              onChange={(e) => {
-                const next = e.target.value;
-                if (betMode === "risk") setToWinFromRisk(next);
-                else setBetInput(next);
-              }}
-              className={inputClass}
-              style={{ opacity: betMode === "risk" ? 1 : 0.85 }}
-            />
-          </div>
+            <div className="col-span-1">
+              <FieldLabel>Stake (Risk)</FieldLabel>
+              <input
+                value={betInput}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  if (betMode === "risk") setToWinFromRisk(next);
+                  else setBetInput(next);
+                }}
+                className={inputClass}
+                style={{ opacity: betMode === "risk" ? 1 : 0.85 }}
+              />
+            </div>
 
-          <div className="grid gap-1.5">
-            <FieldLabel>To Win (Profit)</FieldLabel>
-            <input
-              type="number"
-              value={toWinInput}
-              min={0}
-              step="0.01"
-              onChange={(e) => {
-                const next = e.target.value;
-                if (betMode === "towin") setRiskFromToWin(next);
-                else setToWinInput(next);
-              }}
-              placeholder={betMode === "towin" ? "" : "Auto (switch to To Win)"}
-              className={inputClass}
-              style={{ opacity: betMode === "towin" ? 1 : 0.85 }}
-            />
-          </div>
+            <div className="col-span-1">
+              <FieldLabel>To Win (Profit)</FieldLabel>
+              <input
+                value={toWinInput}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  if (betMode === "towin") setRiskFromToWin(next);
+                  else setToWinInput(next);
+                }}
+                placeholder={betMode === "towin" ? "" : "Auto (switch to To Win)"}
+                className={inputClass}
+                style={{ opacity: betMode === "towin" ? 1 : 0.85 }}
+              />
+            </div>
 
-          <div className="grid gap-1.5">
-            <FieldLabel>Status</FieldLabel>
-            <select
-              value={ticket.ticket_type === "parlay" ? (derivedParlayStatus ?? "open") : singleStatus}
-              onChange={(e) => setSingleStatus(e.target.value as TicketStatus)}
-              disabled={ticket.ticket_type === "parlay"}
-              className={inputClass}
-              style={{
-                opacity: ticket.ticket_type === "parlay" ? 0.65 : 1,
-                cursor: ticket.ticket_type === "parlay" ? "not-allowed" : "pointer",
-              }}
-            >
-              <option value="open">open</option>
-              <option value="won">won</option>
-              <option value="lost">lost</option>
-              <option value="push">push</option>
-              <option value="void">void</option>
-              <option value="partial">partial</option>
-            </select>
+            <div className="col-span-1 md:col-span-2">
+              <FieldLabel>Status</FieldLabel>
+              <select
+                value={singleStatus}
+                onChange={(e) => setSingleStatus(e.target.value as TicketStatus)}
+                disabled={ticket.ticket_type === "parlay"}
+                className={inputClass}
+                style={{
+                  opacity: ticket.ticket_type === "parlay" ? 0.65 : 1,
+                  cursor: ticket.ticket_type === "parlay" ? "not-allowed" : "pointer",
+                }}
+              >
+                <option value="open">open</option>
+                <option value="won">won</option>
+                <option value="lost">lost</option>
+                <option value="push">push</option>
+                <option value="void">void</option>
+                <option value="partial">partial</option>
+              </select>
 
-            {ticket.ticket_type === "parlay" && (
-              <div className="text-xs opacity-70">
-                Derived: <b>{derivedParlayStatus ?? "open"}</b>
-              </div>
-            )}
-          </div>
+              {ticket.ticket_type === "parlay" && (
+                <div className="mt-1 text-[11px] text-zinc-600">
+                  Derived: <span className="font-semibold">{derivedParlayStatus ?? "open"}</span>
+                </div>
+              )}
+            </div>
 
-          <div className="grid gap-1.5 sm:col-span-2 lg:col-span-2">
-            <FieldLabel>Actual payout (optional)</FieldLabel>
-            <input
-              type="number"
-              value={payoutInput}
-              min={0}
-              step="0.01"
-              onChange={(e) => {
-                setPayoutInput(e.target.value);
-                setPayoutEdited(true);
-              }}
-              placeholder="Total return incl. bet"
-              className={inputClass}
-            />
+            <div className="col-span-1 md:col-span-2">
+              <FieldLabel>Actual payout (optional)</FieldLabel>
+              <input
+                value={payoutInput}
+                onChange={(e) => {
+                  setPayoutInput(e.target.value);
+                  setPayoutEdited(true);
+                }}
+                placeholder="Total return incl. bet"
+                className={inputClass}
+              />
+            </div>
           </div>
         </div>
-      </div>
 
-      {/* Legs */}
-      <div className={`${cardClass} mt-4`}>
-        <div className="mb-3 font-black">Legs</div>
+        {/* Legs */}
+        <div className={`mt-3 ${cardClass}`}>
+          <div className="mb-2 text-sm font-bold">Legs</div>
 
-        <div className="grid gap-3">
-          {legs.map((leg) => (
-            <div key={leg.id} className="rounded-2xl border border-zinc-200 bg-white p-3">
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:items-center">
-                <div>
-                  <div className="font-black">{leg.selection}</div>
-                  <div className="mt-1 text-xs opacity-70">
-                    Odds: {leg.american_odds > 0 ? `+${leg.american_odds}` : leg.american_odds}
+          <div className="space-y-2">
+            {legs.map((leg) => (
+              <div key={leg.id} className="rounded-xl border border-zinc-200 bg-white p-2">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold text-zinc-900">
+                      {leg.selection}
+                    </div>
+                    <div className="mt-0.5 text-[11px] text-zinc-600">
+                      Odds: {leg.american_odds > 0 ? `+${leg.american_odds}` : leg.american_odds}
+                    </div>
+                  </div>
+
+                  <div className="w-36">
+                    <FieldLabel>Leg Status</FieldLabel>
+                    <select
+                      value={leg.status}
+                      onChange={(e) => saveLegStatus(leg.id, e.target.value as Leg["status"])}
+                      className={inputClass}
+                      style={{
+                        opacity: ticket.ticket_type === "single" ? 0.65 : 1,
+                        cursor: ticket.ticket_type === "single" ? "not-allowed" : "pointer",
+                      }}
+                      disabled={ticket.ticket_type === "single"}
+                    >
+                      <option value="open">open</option>
+                      <option value="won">won</option>
+                      <option value="lost">lost</option>
+                      <option value="push">push</option>
+                      <option value="void">void</option>
+                    </select>
+
+                    {ticket.ticket_type === "single" && (
+                      <div className="mt-1 text-[11px] text-zinc-600">Mirrors ticket status</div>
+                    )}
                   </div>
                 </div>
 
-                <div className="grid gap-1.5">
-                  <FieldLabel>Leg Status</FieldLabel>
-                  <select
-                    value={leg.status}
-                    disabled={ticket.ticket_type === "single"}
-                    onChange={(e) => saveLegStatus(leg.id, e.target.value as Leg["status"])}
-                    className={inputClass}
-                    style={{
-                      opacity: ticket.ticket_type === "single" ? 0.65 : 1,
-                      cursor: ticket.ticket_type === "single" ? "not-allowed" : "pointer",
-                    }}
-                  >
-                    <option value="open">open</option>
-                    <option value="won">won</option>
-                    <option value="lost">lost</option>
-                    <option value="push">push</option>
-                    <option value="void">void</option>
-                  </select>
-
-                  {ticket.ticket_type === "single" && (
-                    <div className="text-xs opacity-70">Mirrors ticket status</div>
-                  )}
-                </div>
-
-                <div className="sm:text-right">
-                  <div className="text-xs opacity-70">This leg</div>
-                  <div className="font-black">{leg.status.toUpperCase()}</div>
+                <div className="mt-2 text-[11px] text-zinc-600">
+                  This leg: <span className="font-semibold">{leg.status.toUpperCase()}</span>
                 </div>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
+
+        {/* bottom padding so sticky bar doesn't cover content */}
+        <div className="h-20" />
       </div>
 
-      {/* Sticky actions */}
-      <div className="sticky bottom-0 mt-4 border-t border-zinc-200 bg-white/90 py-3 backdrop-blur">
-        <div className="mx-auto flex w-full max-w-5xl flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <button
-            onClick={deleteTicket}
-            className="inline-flex h-11 items-center justify-center rounded-xl border border-red-200 bg-white px-4 font-bold text-red-700"
-          >
-            Delete
-          </button>
-
-          <div className="flex flex-col gap-2 sm:flex-row sm:gap-3">
-            <Link
-              href="/"
-              className="inline-flex h-11 items-center justify-center rounded-xl border border-zinc-200 bg-white px-4 font-bold"
-            >
-              Cancel
-            </Link>
-
-            <button
-              onClick={saveTicketEdits}
-              className="inline-flex h-11 items-center justify-center rounded-xl border border-zinc-900 bg-zinc-900 px-4 font-black text-white"
-            >
-              Save
+      {/* Sticky actions (compact) */}
+      <div className="sticky bottom-0 border-t border-zinc-200 bg-white/80 backdrop-blur">
+        <div className="mx-auto max-w-3xl px-4 py-2">
+          <div className="flex items-center justify-between gap-2">
+            <button type="button" onClick={deleteTicket} className={dangerBtn}>
+              Delete
             </button>
+
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={() => router.push("/")} className={smallBtn}>
+                Cancel
+              </button>
+              <button type="button" onClick={saveTicketEdits} className={primaryBtn}>
+                Save
+              </button>
+            </div>
           </div>
         </div>
       </div>

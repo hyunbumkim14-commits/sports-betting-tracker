@@ -36,6 +36,7 @@ type Ticket = {
 type Leg = {
   id: string;
   ticket_id: string;
+  selection: string | null;
   american_odds: number;
   status: "open" | "won" | "lost" | "push" | "void";
 };
@@ -55,9 +56,8 @@ const LEAGUE_OPTIONS = [
 ] as const;
 
 type DatePreset = "7D" | "30D" | "MTD" | "LAST_MONTH" | "ALL" | "CUSTOM";
-type GraphMode = "BANKROLL" | "PROFIT";
-type StatusFilter = "ALL" | Ticket["status"];
-type DashboardTab = "OVERVIEW" | "OPEN" | "HISTORY" | "PERSONAL";
+type GraphMode = "PROFIT" | "BANKROLL";
+type DashboardTab = "OVERVIEW" | "OPEN" | "CALENDAR" | "PERSONAL";
 
 function pad2(n: number) {
   return String(n).padStart(2, "0");
@@ -95,13 +95,11 @@ function ticketDateForGrouping(t: Ticket) {
   const d = new Date(t.placed_at);
   return yyyyMmDd(new Date(d.getFullYear(), d.getMonth(), d.getDate()));
 }
-
 function americanToDecimal(american: number): number {
   if (!Number.isFinite(american) || american === 0) throw new Error("Invalid American odds");
   if (american > 0) return 1 + american / 100;
   return 1 + 100 / Math.abs(american);
 }
-
 function fmtNumber(n: number) {
   return new Intl.NumberFormat("en-US").format(n);
 }
@@ -140,7 +138,6 @@ function diffYMD(from: Date, to: Date) {
 
   let months = end.getMonth() - anchor.getMonth();
   if (months < 0) months += 12;
-
   let anchor2 = new Date(anchor);
   anchor2.setMonth(anchor.getMonth() + months);
   if (anchor2 > end) {
@@ -151,23 +148,20 @@ function diffYMD(from: Date, to: Date) {
 
   const msPerDay = 24 * 60 * 60 * 1000;
   const days = Math.max(0, Math.round((end.getTime() - anchor2.getTime()) / msPerDay));
-
   return { years, months, days };
 }
 
 function CustomTooltip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
-
   const first = payload.find((p: any) => typeof p?.value === "number");
   const name = first?.name ?? "Value";
   const value = typeof first?.value === "number" ? first.value : null;
-
   return (
-    <div className="rounded-xl border border-zinc-200 bg-white/95 px-3 py-2 text-xs shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
-      <div className="mb-1 font-black">{label}</div>
-      <div className="flex items-center justify-between gap-3">
-        <span className="opacity-70">{name}</span>
-        <span className="font-black">{value === null ? "—" : fmtMoney(value)}</span>
+    <div className="rounded-xl border border-zinc-200 bg-white p-3 text-sm shadow">
+      <div className="font-extrabold">{label}</div>
+      <div className="mt-1">
+        <span className="font-bold">{name}:</span>{" "}
+        {value === null ? "—" : fmtMoney(value)}
       </div>
     </div>
   );
@@ -183,12 +177,57 @@ function Card({
   children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-2xl border border-zinc-200 bg-white p-4">
-      <div className="text-xs opacity-70">{title}</div>
-      {subtitle ? <div className="mt-1 text-xs opacity-60">{subtitle}</div> : null}
-      <div className="mt-2">{children}</div>
+    <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-[0_1px_0_rgba(0,0,0,0.03)]">
+      <div className="text-xs font-extrabold uppercase tracking-wide text-zinc-500">
+        {title}
+      </div>
+      {subtitle ? <div className="mt-1 text-sm text-zinc-600">{subtitle}</div> : null}
+      <div className="mt-3">{children}</div>
     </div>
   );
+}
+
+function Pill({
+  active,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="h-10 rounded-full border px-4 text-sm font-extrabold"
+      style={{
+        background: active ? "#111" : "white",
+        color: active ? "white" : "#111",
+        borderColor: active ? "#111" : "rgb(228 228 231)",
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+function monthLabel(d: Date) {
+  return d.toLocaleString("en-US", { month: "long", year: "numeric" });
+}
+
+function buildCalendarGrid(monthDate: Date) {
+  const first = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1);
+  const last = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0);
+  const startWeekday = first.getDay(); // 0 Sun .. 6 Sat
+  const daysInMonth = last.getDate();
+
+  const cells: Array<{ date: Date | null }> = [];
+  for (let i = 0; i < startWeekday; i++) cells.push({ date: null });
+  for (let day = 1; day <= daysInMonth; day++) {
+    cells.push({ date: new Date(monthDate.getFullYear(), monthDate.getMonth(), day) });
+  }
+  while (cells.length % 7 !== 0) cells.push({ date: null });
+  return cells;
 }
 
 export default function DashboardPage() {
@@ -198,21 +237,31 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
 
   const [tickets, setTickets] = useState<Ticket[]>([]);
-  const [userEmail, setUserEmail] = useState<string>("");
+  const [legsByTicket, setLegsByTicket] = useState<Record<string, Leg[]>>({});
 
-  const [startingBankroll, setStartingBankroll] = useState<number>(0);
+  const [userEmail, setUserEmail] = useState("");
+
+  const [startingBankroll, setStartingBankroll] = useState(0);
   const [profileLoading, setProfileLoading] = useState(true);
   const [profileSaving, setProfileSaving] = useState(false);
 
-  const [leagueFilter, setLeagueFilter] = useState<string>("ALL");
+  const [leagueFilter, setLeagueFilter] = useState<"ALL" | (typeof LEAGUE_OPTIONS)[number]>("ALL");
+
+  // ✅ date range pills (default MTD)
   const [preset, setPreset] = useState<DatePreset>("MTD");
-  const [customStart, setCustomStart] = useState<string>(() => yyyyMmDd(addDays(new Date(), -29)));
-  const [customEnd, setCustomEnd] = useState<string>(() => yyyyMmDd(new Date()));
-  const [graphMode, setGraphMode] = useState<GraphMode>("BANKROLL");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
+  const [customStart, setCustomStart] = useState(() => yyyyMmDd(addDays(new Date(), -29)));
+  const [customEnd, setCustomEnd] = useState(() => yyyyMmDd(new Date()));
+
+  // ✅ profit graph first (default)
+  const [graphMode, setGraphMode] = useState<GraphMode>("PROFIT");
 
   const [tab, setTab] = useState<DashboardTab>("OVERVIEW");
+
   const [quickUpdatingId, setQuickUpdatingId] = useState<string | null>(null);
+
+  // Calendar tab state
+  const [calendarMonth, setCalendarMonth] = useState(() => startOfMonth(new Date()));
+  const [selectedDay, setSelectedDay] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -225,7 +274,6 @@ export default function DashboardPage() {
         router.replace("/login");
         return;
       }
-
       setUserEmail(data.session.user.email ?? "");
       setAuthChecked(true);
     }
@@ -249,7 +297,6 @@ export default function DashboardPage() {
 
     async function loadProfile() {
       setProfileLoading(true);
-
       const { data: auth } = await supabase.auth.getUser();
       const uid = auth.user?.id;
       if (!uid) {
@@ -266,10 +313,10 @@ export default function DashboardPage() {
       if (!error && data) {
         if (alive) setStartingBankroll(Number(data.starting_bankroll) || 0);
       } else {
-        const { error: upsertErr } = await supabase
-          .from("profiles")
-          .upsert({ id: uid, starting_bankroll: 0 });
-
+        const { error: upsertErr } = await supabase.from("profiles").upsert({
+          id: uid,
+          starting_bankroll: 0,
+        });
         if (!upsertErr && alive) setStartingBankroll(0);
       }
 
@@ -284,7 +331,6 @@ export default function DashboardPage() {
 
   async function saveStartingBankroll() {
     setProfileSaving(true);
-
     const { data: auth } = await supabase.auth.getUser();
     const uid = auth.user?.id;
     if (!uid) {
@@ -294,15 +340,16 @@ export default function DashboardPage() {
 
     const safe = Number.isFinite(startingBankroll) ? startingBankroll : 0;
 
-    const { error } = await supabase
-      .from("profiles")
-      .upsert({ id: uid, starting_bankroll: safe });
+    const { error } = await supabase.from("profiles").upsert({
+      id: uid,
+      starting_bankroll: safe,
+    });
 
     setProfileSaving(false);
     if (error) alert(error.message);
   }
 
-  async function loadTickets() {
+  async function loadTicketsAndLegs() {
     setLoading(true);
 
     const { data, error } = await supabase
@@ -317,13 +364,42 @@ export default function DashboardPage() {
       return;
     }
 
-    setTickets((data ?? []) as Ticket[]);
+    const t = (data ?? []) as Ticket[];
+    setTickets(t);
+
+    // ✅ fetch legs so ticket cards can show the lines/picks
+    const ids = t.map((x) => x.id);
+    if (ids.length) {
+      const { data: legs, error: legsErr } = await supabase
+        .from("legs")
+        .select("id, ticket_id, selection, american_odds, status")
+        .in("ticket_id", ids);
+
+      if (legsErr) {
+        console.error(legsErr);
+        // Don’t block dashboard if legs fail.
+        setLegsByTicket({});
+      } else {
+        const map: Record<string, Leg[]> = {};
+        for (const l of (legs ?? []) as Leg[]) {
+          (map[l.ticket_id] = map[l.ticket_id] ?? []).push(l);
+        }
+        // stable ordering
+        for (const k of Object.keys(map)) {
+          map[k].sort((a, b) => (a.id > b.id ? 1 : -1));
+        }
+        setLegsByTicket(map);
+      }
+    } else {
+      setLegsByTicket({});
+    }
+
     setLoading(false);
   }
 
   useEffect(() => {
     if (!authChecked) return;
-    loadTickets();
+    loadTicketsAndLegs();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authChecked]);
 
@@ -344,9 +420,9 @@ export default function DashboardPage() {
     return { rangeStart: null, rangeEndInclusive: null };
   }, [preset, customStart, customEnd]);
 
+  // Applied filters for OVERVIEW (and not for OPEN tab)
   const filteredTickets = useMemo(() => {
     const startIso = rangeStart ? toLocalMidnightIso(rangeStart) : null;
-
     const endExclusiveIso = rangeEndInclusive
       ? toLocalMidnightIso(yyyyMmDd(addDays(new Date(rangeEndInclusive + "T00:00:00"), 1)))
       : null;
@@ -360,10 +436,10 @@ export default function DashboardPage() {
     });
   }, [tickets, leagueFilter, rangeStart, rangeEndInclusive]);
 
-  const statusFilteredTickets = useMemo(() => {
-    if (statusFilter === "ALL") return filteredTickets;
-    return filteredTickets.filter((t) => t.status === statusFilter);
-  }, [filteredTickets, statusFilter]);
+  const settledTicketsInRange = useMemo(
+    () => filteredTickets.filter((t) => t.status !== "open"),
+    [filteredTickets]
+  );
 
   const summary = useMemo(() => {
     let totalProfit = 0;
@@ -372,28 +448,19 @@ export default function DashboardPage() {
     let losses = 0;
     let pushes = 0;
 
-    for (const t of statusFilteredTickets) {
+    for (const t of settledTicketsInRange) {
       totalBet += Number(t.stake || 0);
-
       const st = t.status;
       if (st === "won") wins += 1;
       else if (st === "lost") losses += 1;
       else if (st === "push" || st === "void") pushes += 1;
 
-      if (typeof t.profit === "number" && Number.isFinite(t.profit)) {
-        totalProfit += t.profit;
-      }
+      if (typeof t.profit === "number" && Number.isFinite(t.profit)) totalProfit += t.profit;
     }
 
     const roi = totalBet > 0 ? (totalProfit / totalBet) * 100 : 0;
-
-    return {
-      totalProfit,
-      totalBet,
-      roi,
-      record: `${wins}-${losses}-${pushes}`,
-    };
-  }, [statusFilteredTickets]);
+    return { totalProfit, totalBet, roi, record: `${wins}-${losses}-${pushes}` };
+  }, [settledTicketsInRange]);
 
   const allTimeProfit = useMemo(() => {
     return tickets.reduce((acc, t) => {
@@ -406,10 +473,10 @@ export default function DashboardPage() {
     return round2((Number(startingBankroll) || 0) + allTimeProfit);
   }, [startingBankroll, allTimeProfit]);
 
+  // ✅ Unit size stays in PERSONAL only (not overview)
   const unitCard = useMemo(() => {
     const now = new Date();
     const prevMonthEnd = lastDayOfPreviousMonth(now);
-
     const prevMonthEndIsoExclusive = new Date(
       prevMonthEnd.getFullYear(),
       prevMonthEnd.getMonth(),
@@ -436,13 +503,16 @@ export default function DashboardPage() {
     };
   }, [tickets, startingBankroll]);
 
+  // ✅ CHART DATA WITH NO BREAKS:
+  // build a continuous daily series, carrying forward bankroll/profit even on days with no bets.
   const chartData = useMemo(() => {
+    if (!tickets.length) return [];
+
     const startIso = rangeStart ? toLocalMidnightIso(rangeStart) : null;
 
     const profitBeforeRange = tickets.reduce((acc, t) => {
       const passLeague = leagueFilter === "ALL" ? true : (t.league ?? "") === leagueFilter;
       if (!passLeague) return acc;
-
       if (startIso && t.placed_at < startIso) {
         if (typeof t.profit === "number" && Number.isFinite(t.profit)) return acc + t.profit;
       }
@@ -451,43 +521,55 @@ export default function DashboardPage() {
 
     const baselineBankroll = round2((Number(startingBankroll) || 0) + profitBeforeRange);
 
-    const map = new Map<string, number>();
+    // per-day realized profit inside range (only where profit is known)
+    const dayProfitMap = new Map<string, number>();
     for (const t of filteredTickets) {
       const day = ticketDateForGrouping(t);
       const p = typeof t.profit === "number" && Number.isFinite(t.profit) ? t.profit : 0;
-      map.set(day, (map.get(day) ?? 0) + p);
+      dayProfitMap.set(day, (dayProfitMap.get(day) ?? 0) + p);
     }
 
-    const days = Array.from(map.keys()).sort();
+    // decide series start/end
+    const now = new Date();
+    const startDay = rangeStart
+      ? new Date(rangeStart + "T00:00:00")
+      : filteredTickets.length
+      ? new Date(ticketDateForGrouping(filteredTickets[filteredTickets.length - 1]) + "T00:00:00")
+      : new Date(yyyyMmDd(now) + "T00:00:00");
+
+    const endDay = rangeEndInclusive
+      ? new Date(rangeEndInclusive + "T00:00:00")
+      : new Date(yyyyMmDd(now) + "T00:00:00");
+
+    // ensure start <= end
+    const s = startDay <= endDay ? startDay : endDay;
+    const e = startDay <= endDay ? endDay : startDay;
+
+    const rows: Array<any> = [];
     let runningBankroll = baselineBankroll;
     let profitInRange = 0;
 
-    return days.map((d) => {
-      const dayProfit = map.get(d) ?? 0;
-      runningBankroll += dayProfit;
+    for (let d = new Date(s); d <= e; d = addDays(d, 1)) {
+      const key = yyyyMmDd(d);
+      const dayProfit = dayProfitMap.get(key) ?? 0;
       profitInRange += dayProfit;
+      runningBankroll += dayProfit;
 
       const p = round2(profitInRange);
 
-      return {
-        date: d,
+      rows.push({
+        date: key,
         bankroll: round2(runningBankroll),
         profitInRange: p,
         profitPos: p >= 0 ? p : null,
         profitNeg: p < 0 ? p : null,
-      };
-    });
-  }, [filteredTickets, tickets, startingBankroll, leagueFilter, rangeStart]);
+      });
+    }
+
+    return rows;
+  }, [filteredTickets, tickets, startingBankroll, leagueFilter, rangeStart, rangeEndInclusive]);
 
   const openTicketsAll = useMemo(() => tickets.filter((t) => t.status === "open"), [tickets]);
-  const openTickets = useMemo(
-    () => statusFilteredTickets.filter((t) => t.status === "open"),
-    [statusFilteredTickets]
-  );
-  const settledTickets = useMemo(
-    () => statusFilteredTickets.filter((t) => t.status !== "open"),
-    [statusFilteredTickets]
-  );
 
   const firstTicketDate = useMemo(() => {
     if (!tickets.length) return null;
@@ -508,7 +590,7 @@ export default function DashboardPage() {
     try {
       const { data: legs, error: legsErr } = await supabase
         .from("legs")
-        .select("id, ticket_id, american_odds, status")
+        .select("id, ticket_id, selection, american_odds, status")
         .eq("ticket_id", ticket.id);
 
       if (legsErr) throw legsErr;
@@ -557,6 +639,7 @@ export default function DashboardPage() {
 
       if (tErr) throw tErr;
 
+      // Sync leg statuses (nice-to-have)
       if (legsArr.length) {
         const legStatus: Leg["status"] =
           nextStatus === "won"
@@ -572,13 +655,33 @@ export default function DashboardPage() {
         await supabase.from("legs").update({ status: legStatus }).eq("ticket_id", ticket.id);
       }
 
+      // update local
       setTickets((prev) =>
         prev.map((t) =>
-          t.id === ticket.id
-            ? { ...t, status: nextStatus, payout, profit, settled_at: nextStatus === "open" ? null : settledAt }
-            : t
+          t.id === ticket.id ? { ...t, status: nextStatus, payout, profit, settled_at: nextStatus === "open" ? null : settledAt } : t
         )
       );
+
+      // refresh legs map (so cards show correct statuses if you care later)
+      setLegsByTicket((prev) => {
+        const next = { ...prev };
+        if (next[ticket.id]) {
+          next[ticket.id] = next[ticket.id].map((l) => ({
+            ...l,
+            status:
+              nextStatus === "won"
+                ? "won"
+                : nextStatus === "lost"
+                ? "lost"
+                : nextStatus === "push"
+                ? "push"
+                : nextStatus === "void"
+                ? "void"
+                : "open",
+          }));
+        }
+        return next;
+      });
     } catch (e: any) {
       console.error(e);
       alert(e?.message ?? "Failed to update ticket.");
@@ -595,395 +698,106 @@ export default function DashboardPage() {
         className="flex flex-1 flex-col items-center justify-center gap-0.5 py-2 text-xs font-extrabold"
         style={{ color: active ? "#111" : "rgba(0,0,0,0.55)" }}
       >
-        <div
-          className="h-1.5 w-10 rounded-full"
-          style={{ background: active ? "#111" : "transparent" }}
-        />
-        <div>{label}</div>
+        {label}
       </button>
     );
   }
 
-  if (!authChecked) return <div className="px-4 py-6">Checking session…</div>;
-  if (loading) return <div className="px-4 py-6">Loading…</div>;
+  function TicketList({
+    tickets,
+    mode,
+    onQuickSettle,
+    quickUpdatingId,
+  }: {
+    tickets: Ticket[];
+    mode: "LINK" | "OPEN_ACTIONS";
+    onQuickSettle?: (ticket: Ticket, nextStatus: Ticket["status"]) => Promise<void>;
+    quickUpdatingId?: string | null;
+  }) {
+    function statusPillColor(s: Ticket["status"]) {
+      if (s === "won") return "rgba(15, 122, 42, 0.12)";
+      if (s === "lost") return "rgba(176, 0, 32, 0.10)";
+      if (s === "open") return "rgba(17, 17, 17, 0.08)";
+      return "rgba(17, 17, 17, 0.06)";
+    }
 
-  return (
-    <div className="mx-auto w-full max-w-6xl px-4 py-5 sm:px-6 pb-24">
-      {/* Header */}
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <div className="text-xs opacity-70">Dashboard</div>
-          <h1 className="text-2xl font-black tracking-tight">
-            {tab === "OVERVIEW"
-              ? "Overview"
-              : tab === "OPEN"
-              ? "Open"
-              : tab === "HISTORY"
-              ? "History"
-              : "Personal"}
-          </h1>
+    function LinesPreview({ ticketId }: { ticketId: string }) {
+      const legs = legsByTicket[ticketId] ?? [];
+      const usable = legs.filter((l) => (l.selection ?? "").trim() !== "" || Number.isFinite(l.american_odds));
+      if (!usable.length) return null;
+
+      const top = usable.slice(0, 3);
+      const extra = usable.length - top.length;
+
+      return (
+        <div className="mt-2 rounded-xl border border-zinc-200 bg-zinc-50 p-2 text-xs">
+          <div className="font-extrabold text-zinc-600">Lines</div>
+          <ul className="mt-1 space-y-1">
+            {top.map((l) => (
+              <li key={l.id} className="flex items-center justify-between gap-2">
+                <span className="truncate">
+                  {(l.selection ?? "—").trim() || "—"}
+                </span>
+                <span className="shrink-0 font-extrabold text-zinc-700">
+                  {Number.isFinite(l.american_odds) ? (l.american_odds > 0 ? `+${l.american_odds}` : `${l.american_odds}`) : "—"}
+                </span>
+              </li>
+            ))}
+          </ul>
+          {extra > 0 ? <div className="mt-1 text-zinc-500">+ {extra} more</div> : null}
         </div>
+      );
+    }
 
-        <div className="flex items-center gap-2">
-          <Link
-            href="/new"
-            className="inline-flex h-10 items-center justify-center rounded-xl border border-zinc-200 bg-white px-3 text-sm font-bold"
-          >
-            + New
-          </Link>
-
-          {/* ✅ smaller logout */}
-          <button
-            onClick={async () => {
-              await supabase.auth.signOut();
-              router.replace("/login");
-            }}
-            className="inline-flex h-9 items-center justify-center rounded-xl border border-zinc-200 bg-white px-3 text-xs font-bold"
-          >
-            Log out
-          </button>
-        </div>
-      </div>
-
-      {/* Filters (apply to overview + lists) */}
-      {tab !== "PERSONAL" && (
-        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <label className="grid gap-1.5">
-            <span className="text-xs opacity-70">League</span>
-            <select
-              value={leagueFilter}
-              onChange={(e) => setLeagueFilter(e.target.value)}
-              className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
+    function TicketCardInner({ t }: { t: Ticket }) {
+      return (
+        <div className="relative rounded-2xl border border-zinc-200 bg-white p-4 shadow-[0_1px_0_rgba(0,0,0,0.03)]">
+          {/* View top-right */}
+          <div className="absolute right-3 top-3">
+            <Link
+              href={`/ticket/${t.id}`}
+              className="inline-flex h-9 items-center justify-center rounded-xl border border-zinc-200 bg-white px-3 text-xs font-extrabold"
             >
-              <option value="ALL">All</option>
-              {LEAGUE_OPTIONS.map((l) => (
-                <option key={l} value={l}>
-                  {l}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="grid gap-1.5">
-            <span className="text-xs opacity-70">Date Range</span>
-            <select
-              value={preset}
-              onChange={(e) => setPreset(e.target.value as DatePreset)}
-              className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
-            >
-              <option value="7D">Last 7 Days</option>
-              <option value="30D">Last 30 Days</option>
-              <option value="MTD">MTD</option>
-              <option value="LAST_MONTH">Last Month</option>
-              <option value="ALL">All-Time</option>
-              <option value="CUSTOM">Custom</option>
-            </select>
-          </label>
-
-          <label className="grid gap-1.5">
-            <span className="text-xs opacity-70">Status</span>
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
-              className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
-            >
-              <option value="ALL">All</option>
-              <option value="open">open</option>
-              <option value="won">won</option>
-              <option value="lost">lost</option>
-              <option value="push">push</option>
-              <option value="void">void</option>
-              <option value="partial">partial</option>
-            </select>
-          </label>
-
-          {preset === "CUSTOM" && (
-            <>
-              <label className="grid gap-1.5">
-                <span className="text-xs opacity-70">Start</span>
-                <input
-                  type="date"
-                  value={customStart}
-                  onChange={(e) => setCustomStart(e.target.value)}
-                  className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
-                />
-              </label>
-
-              <label className="grid gap-1.5">
-                <span className="text-xs opacity-70">End</span>
-                <input
-                  type="date"
-                  value={customEnd}
-                  onChange={(e) => setCustomEnd(e.target.value)}
-                  className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
-                />
-              </label>
-            </>
-          )}
-        </div>
-      )}
-
-      {/* OVERVIEW */}
-      {tab === "OVERVIEW" && (
-        <>
-          <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            <Card title="Current Bankroll" subtitle="Starting + all-time profit">
-              <div className="text-2xl font-black" style={{ color: profitColor(currentBankroll - startingBankroll) }}>
-                {fmtMoney(currentBankroll)}
-              </div>
-            </Card>
-
-            <Card title="Total Profit (Filter)" subtitle={`Record: ${summary.record}`}>
-              <div className="text-2xl font-black" style={{ color: profitColor(summary.totalProfit) }}>
-                {fmtMoney(summary.totalProfit)}
-              </div>
-            </Card>
-
-            <Card title="ROI (Filter)">
-              <div className="text-2xl font-black" style={{ color: profitColor(summary.roi) }}>
-                {summary.roi.toFixed(2)}%
-              </div>
-            </Card>
-
-            <Card title="Total Bet (Filter)">
-              <div className="text-2xl font-black">{fmtMoney(summary.totalBet)}</div>
-            </Card>
-
-            <Card title="Tickets (Filter)">
-              <div className="text-2xl font-black">{fmtNumber(statusFilteredTickets.length)}</div>
-            </Card>
-
-            <Card title="Unit Size" subtitle={`As of ${unitCard.prevMonthEndLabel}`}>
-              <div className="text-2xl font-black">{fmtMoney(unitCard.unitSize)}</div>
-              <div className="mt-1 text-xs opacity-70">
-                5% of {fmtMoney(unitCard.prevMonthEndingBankroll)} (rounded down to $50)
-              </div>
-            </Card>
+              View →
+            </Link>
           </div>
 
-          <div className="mt-5 rounded-2xl border border-zinc-200 bg-white p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div className="font-black">{graphMode === "BANKROLL" ? "Bankroll" : "Profit (Range)"}</div>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setGraphMode("BANKROLL")}
-                  className="h-10 rounded-xl border border-zinc-200 px-3 text-sm font-extrabold"
-                  style={{
-                    background: graphMode === "BANKROLL" ? "#111" : "white",
-                    color: graphMode === "BANKROLL" ? "white" : "#111",
-                  }}
-                >
-                  Bankroll
-                </button>
-                <button
-                  onClick={() => setGraphMode("PROFIT")}
-                  className="h-10 rounded-xl border border-zinc-200 px-3 text-sm font-extrabold"
-                  style={{
-                    background: graphMode === "PROFIT" ? "#111" : "white",
-                    color: graphMode === "PROFIT" ? "white" : "#111",
-                  }}
-                >
-                  Profit
-                </button>
+          <div className="flex items-start justify-between gap-3 pr-20">
+            <div>
+              <div className="text-sm font-extrabold">
+                {t.league ?? "—"} • {t.ticket_type.toUpperCase()}
+              </div>
+              <div className="mt-1 text-xs text-zinc-600">
+                Date: {ticketDateForGrouping(t)} • Book: {t.book ?? "—"}
               </div>
             </div>
-
-            <div className="mt-3 h-64 sm:h-72">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={chartData} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="chartFill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#111" stopOpacity={0.18} />
-                      <stop offset="100%" stopColor="#111" stopOpacity={0.02} />
-                    </linearGradient>
-                  </defs>
-
-                  <CartesianGrid strokeDasharray="4 4" vertical={false} />
-                  <XAxis dataKey="date" tick={{ fontSize: 12 }} tickLine={false} axisLine={false} minTickGap={24} />
-                  <YAxis
-                    tick={{ fontSize: 12 }}
-                    tickLine={false}
-                    axisLine={false}
-                    domain={graphMode === "BANKROLL" ? [Number(startingBankroll) || 0, "auto"] : ["auto", "auto"]}
-                    tickFormatter={(v) => fmtMoneyCompact(Number(v))}
-                  />
-                  <Tooltip content={<CustomTooltip />} />
-
-                  {graphMode === "BANKROLL" ? (
-                    <>
-                      <Area type="monotone" dataKey="bankroll" fill="url(#chartFill)" stroke="none" />
-                      <Line type="monotone" name="Bankroll" dataKey="bankroll" stroke="#111" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} />
-                    </>
-                  ) : (
-                    <>
-                      <Area type="monotone" dataKey="profitInRange" fill="url(#chartFill)" stroke="none" />
-                      <Line type="monotone" name="Profit" dataKey="profitPos" stroke="#0f7a2a" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} />
-                      <Line type="monotone" name="Profit" dataKey="profitNeg" stroke="#b00020" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} />
-                    </>
-                  )}
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        </>
-      )}
-
-      {/* OPEN */}
-      {tab === "OPEN" && (
-        <div className="mt-5">
-          <div className="flex items-center justify-between gap-3">
-            <div className="text-xl font-black">Open Tickets ({fmtNumber(openTickets.length)})</div>
-            <button
-              onClick={loadTickets}
-              className="inline-flex h-10 items-center justify-center rounded-xl border border-zinc-200 bg-white px-3 text-sm font-bold"
-            >
-              Refresh
-            </button>
-          </div>
-
-          <div className="mt-3">
-            <TicketList
-              tickets={openTickets}
-              mode="OPEN_ACTIONS"
-              onQuickSettle={quickSettleTicket}
-              quickUpdatingId={quickUpdatingId}
-            />
-          </div>
-        </div>
-      )}
-
-      {/* HISTORY */}
-      {tab === "HISTORY" && (
-        <div className="mt-5">
-          <div className="text-xl font-black">Tickets ({fmtNumber(statusFilteredTickets.length)})</div>
-
-          {statusFilter === "ALL" ? (
-            <>
-              <div className="mt-3 mb-2 font-black">
-                Settled <span className="font-bold opacity-60">({fmtNumber(settledTickets.length)})</span>
-              </div>
-              <TicketList tickets={settledTickets} mode="LINK" />
-
-              <div className="mt-5 mb-2 font-black">
-                Open <span className="font-bold opacity-60">({fmtNumber(openTickets.length)})</span>
-              </div>
-              <TicketList tickets={openTickets} mode="LINK" />
-            </>
-          ) : (
-            <div className="mt-3">
-              <TicketList tickets={statusFilteredTickets} mode="LINK" />
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* PERSONAL */}
-      {tab === "PERSONAL" && (
-        <div className="mt-5 grid gap-3 sm:grid-cols-2">
-          <Card title="Account Email">
-            <div className="text-lg font-black">{userEmail || "—"}</div>
-          </Card>
-
-          <Card title="Starting Bankroll">
-            {profileLoading ? (
-              <div className="text-sm opacity-70">Loading…</div>
-            ) : (
-              <>
-                <input
-                  type="number"
-                  value={startingBankroll}
-                  onChange={(e) => setStartingBankroll(Number(e.target.value))}
-                  className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
-                />
-                <button
-                  onClick={saveStartingBankroll}
-                  disabled={profileSaving}
-                  className="mt-2 inline-flex h-11 w-full items-center justify-center rounded-xl border border-zinc-200 bg-white font-bold disabled:opacity-60"
-                >
-                  {profileSaving ? "Saving…" : "Save"}
-                </button>
-              </>
-            )}
-          </Card>
-
-          <Card title="Unit Size" subtitle={`As of ${unitCard.prevMonthEndLabel}`}>
-            <div className="text-lg font-black">{fmtMoney(unitCard.unitSize)}</div>
-            <div className="mt-1 text-xs opacity-70">
-              Based on ending bankroll {fmtMoney(unitCard.prevMonthEndingBankroll)}
-            </div>
-          </Card>
-
-          <Card title="Betting Experience" subtitle={firstTicketDate ? `First ticket: ${yyyyMmDd(firstTicketDate)}` : "No tickets yet"}>
-            {experience ? (
-              <div className="text-lg font-black">
-                {experience.years}y {experience.months}m {experience.days}d
-              </div>
-            ) : (
-              <div className="text-sm opacity-70">Add your first ticket to start tracking experience.</div>
-            )}
-          </Card>
-        </div>
-      )}
-
-      {/* Bottom App Tabs */}
-      <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-zinc-200 bg-white/95 backdrop-blur">
-        <div className="mx-auto flex w-full max-w-6xl px-4 sm:px-6">
-          <BottomTabButton id="OVERVIEW" label="Overview" />
-          <BottomTabButton id="OPEN" label={`Open (${openTicketsAll.length})`} />
-          <BottomTabButton id="HISTORY" label="History" />
-          <BottomTabButton id="PERSONAL" label="Personal" />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function TicketList({
-  tickets,
-  mode,
-  onQuickSettle,
-  quickUpdatingId,
-}: {
-  tickets: Ticket[];
-  mode: "LINK" | "OPEN_ACTIONS";
-  onQuickSettle?: (ticket: Ticket, nextStatus: Ticket["status"]) => Promise<void>;
-  quickUpdatingId?: string | null;
-}) {
-  function statusPillColor(s: Ticket["status"]) {
-    if (s === "won") return "rgba(15, 122, 42, 0.12)";
-    if (s === "lost") return "rgba(176, 0, 32, 0.10)";
-    if (s === "open") return "rgba(17, 17, 17, 0.08)";
-    return "rgba(17, 17, 17, 0.06)";
-  }
-
-  function TicketCardInner({ t }: { t: Ticket }) {
-    return (
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="grid gap-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="font-black">
-              {t.league ?? "—"} • {t.ticket_type.toUpperCase()}
-            </div>
-
-            <span
-              className="rounded-full border border-black/5 px-2 py-1 text-xs font-black"
+            <div
+              className="shrink-0 rounded-full px-3 py-1 text-xs font-extrabold"
               style={{ background: statusPillColor(t.status) }}
             >
               {t.status.toUpperCase()}
-            </span>
+            </div>
           </div>
 
-          <div className="text-xs opacity-75">
-            Date: {ticketDateForGrouping(t)} • Book: {t.book ?? "—"}
+          <div className="mt-3 text-sm">
+            <div className="text-zinc-700">
+              Bet: <span className="font-extrabold">{fmtMoney(Number(t.stake || 0))}</span>
+              {typeof t.payout === "number" ? (
+                <>
+                  {" "}
+                  • Payout: <span className="font-extrabold">{fmtMoney(t.payout)}</span>
+                </>
+              ) : (
+                ""
+              )}
+            </div>
           </div>
 
-          <div className="text-xs opacity-75">
-            Bet: {fmtMoney(Number(t.stake || 0))}
-            {typeof t.payout === "number" ? ` • Payout: ${fmtMoney(t.payout)}` : ""}
-          </div>
+          {/* ✅ Show legs/lines if present */}
+          <LinesPreview ticketId={t.id} />
 
           {mode === "OPEN_ACTIONS" && (
-            <div className="mt-1 flex flex-wrap gap-2">
+            <div className="mt-3 flex flex-wrap gap-2">
               <button
                 disabled={quickUpdatingId === t.id}
                 onClick={(e) => {
@@ -991,10 +805,11 @@ function TicketList({
                   e.stopPropagation();
                   onQuickSettle?.(t, "won");
                 }}
-                className="h-10 rounded-xl border border-zinc-200 bg-white px-3 text-sm font-extrabold disabled:opacity-60"
+                className="h-10 rounded-xl bg-green-600 px-3 text-sm font-extrabold text-white disabled:opacity-60"
               >
                 ✔ Win
               </button>
+
               <button
                 disabled={quickUpdatingId === t.id}
                 onClick={(e) => {
@@ -1002,10 +817,11 @@ function TicketList({
                   e.stopPropagation();
                   onQuickSettle?.(t, "lost");
                 }}
-                className="h-10 rounded-xl border border-zinc-200 bg-white px-3 text-sm font-extrabold disabled:opacity-60"
+                className="h-10 rounded-xl bg-red-600 px-3 text-sm font-extrabold text-white disabled:opacity-60"
               >
                 ✖ Loss
               </button>
+
               <button
                 disabled={quickUpdatingId === t.id}
                 onClick={(e) => {
@@ -1017,6 +833,7 @@ function TicketList({
               >
                 Push
               </button>
+
               <button
                 disabled={quickUpdatingId === t.id}
                 onClick={(e) => {
@@ -1029,56 +846,458 @@ function TicketList({
                 Void
               </button>
 
-              {/* ✅ View button */}
-              <Link
-                href={`/ticket/${t.id}`}
-                className="inline-flex h-10 items-center justify-center rounded-xl border border-zinc-200 bg-white px-3 text-sm font-extrabold"
-              >
-                View →
-              </Link>
-
-              {quickUpdatingId === t.id && (
-                <span className="self-center text-xs font-bold opacity-70">Updating…</span>
-              )}
+              {quickUpdatingId === t.id ? (
+                <div className="flex items-center text-sm font-bold text-zinc-500">Updating…</div>
+              ) : null}
             </div>
           )}
-        </div>
 
-        <div className="sm:text-right">
-          <div className="text-xs opacity-70">Profit</div>
-          <div
-            className="text-lg font-black"
-            style={{ color: typeof t.profit === "number" ? profitColor(t.profit) : "#111" }}
-          >
-            {typeof t.profit === "number" ? fmtMoney(t.profit) : "—"}
+          <div className="mt-3">
+            <div className="text-xs font-extrabold uppercase tracking-wide text-zinc-500">Profit</div>
+            <div className="mt-1 text-lg font-extrabold" style={{ color: profitColor(Number(t.profit ?? 0)) }}>
+              {typeof t.profit === "number" ? fmtMoney(t.profit) : "—"}
+            </div>
           </div>
         </div>
+      );
+    }
+
+    return (
+      <div className="space-y-3">
+        {tickets.length === 0 ? (
+          <div className="rounded-2xl border border-zinc-200 bg-white p-4 text-sm text-zinc-600">
+            No tickets.
+          </div>
+        ) : null}
+
+        {tickets.map((t) =>
+          mode === "LINK" ? (
+            <Link key={t.id} href={`/ticket/${t.id}`} className="block">
+              <TicketCardInner t={t} />
+            </Link>
+          ) : (
+            <TicketCardInner key={t.id} t={t} />
+          )
+        )}
+      </div>
+    );
+  }
+
+  // Calendar derived data (uses all tickets, but shows totals for the month)
+  const calendarMonthStart = useMemo(() => startOfMonth(calendarMonth), [calendarMonth]);
+  const calendarMonthEnd = useMemo(() => endOfMonth(calendarMonth), [calendarMonth]);
+
+  const ticketsInCalendarMonth = useMemo(() => {
+    const startIso = toLocalMidnightIso(yyyyMmDd(calendarMonthStart));
+    const endExclusiveIso = toLocalMidnightIso(yyyyMmDd(addDays(calendarMonthEnd, 1)));
+    return tickets.filter((t) => t.placed_at >= startIso && t.placed_at < endExclusiveIso);
+  }, [tickets, calendarMonthStart, calendarMonthEnd]);
+
+  const dayTotals = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const t of ticketsInCalendarMonth) {
+      const day = ticketDateForGrouping(t);
+      const p = typeof t.profit === "number" && Number.isFinite(t.profit) ? t.profit : 0;
+      map.set(day, (map.get(day) ?? 0) + p);
+    }
+    return map;
+  }, [ticketsInCalendarMonth]);
+
+  const ticketsForSelectedDay = useMemo(() => {
+    if (!selectedDay) return [];
+    const startIso = toLocalMidnightIso(selectedDay);
+    const endExclusiveIso = toLocalMidnightIso(yyyyMmDd(addDays(new Date(selectedDay + "T00:00:00"), 1)));
+    return tickets.filter((t) => t.placed_at >= startIso && t.placed_at < endExclusiveIso);
+  }, [tickets, selectedDay]);
+
+  if (!authChecked) {
+    return (
+      <div className="mx-auto max-w-2xl p-4 text-sm font-bold text-zinc-600">
+        Checking session…
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="mx-auto max-w-2xl p-4 text-sm font-bold text-zinc-600">
+        Loading…
       </div>
     );
   }
 
   return (
-    <div className="grid gap-3">
-      {tickets.length === 0 && <div className="text-sm opacity-70">No tickets in this filter.</div>}
-
-      {tickets.map((t) =>
-        mode === "LINK" ? (
-          <Link
-            key={t.id}
-            href={`/ticket/${t.id}`}
-            className="block rounded-2xl border border-zinc-200 bg-white p-4 no-underline shadow-[0_1px_0_rgba(0,0,0,0.03)]"
-          >
-            <TicketCardInner t={t} />
-          </Link>
-        ) : (
-          <div
-            key={t.id}
-            className="block rounded-2xl border border-zinc-200 bg-white p-4 shadow-[0_1px_0_rgba(0,0,0,0.03)]"
-          >
-            <TicketCardInner t={t} />
+    <div className="mx-auto max-w-2xl p-4 pb-24">
+      {/* Header */}
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div>
+          <div className="text-xl font-extrabold">Dashboard</div>
+          <div className="text-sm text-zinc-600">
+            {tab === "OVERVIEW"
+              ? "Overview"
+              : tab === "OPEN"
+              ? "Open Tickets"
+              : tab === "CALENDAR"
+              ? "Calendar"
+              : "Personal"}
           </div>
-        )
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Link
+            href="/new"
+            className="inline-flex h-10 items-center justify-center rounded-xl bg-black px-4 text-sm font-extrabold text-white"
+          >
+            + New
+          </Link>
+
+          <button
+            onClick={async () => {
+              await supabase.auth.signOut();
+              router.replace("/login");
+            }}
+            className="inline-flex h-10 items-center justify-center rounded-xl border border-zinc-200 bg-white px-3 text-xs font-bold"
+          >
+            Log out
+          </button>
+        </div>
+      </div>
+
+      {/* Filters (OVERVIEW only) */}
+      {tab === "OVERVIEW" && (
+        <div className="mb-4 space-y-3">
+          <div className="flex flex-wrap gap-2">
+            <Pill active={preset === "MTD"} label="MTD" onClick={() => setPreset("MTD")} />
+            <Pill active={preset === "7D"} label="7D" onClick={() => setPreset("7D")} />
+            <Pill active={preset === "30D"} label="30D" onClick={() => setPreset("30D")} />
+            <Pill active={preset === "LAST_MONTH"} label="Last Month" onClick={() => setPreset("LAST_MONTH")} />
+            <Pill active={preset === "ALL"} label="All-Time" onClick={() => setPreset("ALL")} />
+            <Pill active={preset === "CUSTOM"} label="Custom" onClick={() => setPreset("CUSTOM")} />
+          </div>
+
+          {preset === "CUSTOM" ? (
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                type="date"
+                value={customStart}
+                onChange={(e) => setCustomStart(e.target.value)}
+                className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-sm font-bold"
+              />
+              <input
+                type="date"
+                value={customEnd}
+                onChange={(e) => setCustomEnd(e.target.value)}
+                className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-sm font-bold"
+              />
+            </div>
+          ) : null}
+
+          <div className="flex items-center gap-2">
+            <select
+              value={leagueFilter}
+              onChange={(e) => setLeagueFilter(e.target.value as any)}
+              className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-sm font-bold"
+            >
+              <option value="ALL">All Leagues</option>
+              {LEAGUE_OPTIONS.map((l) => (
+                <option key={l} value={l}>
+                  {l}
+                </option>
+              ))}
+            </select>
+
+            <button
+              onClick={() => loadTicketsAndLegs()}
+              className="inline-flex h-11 shrink-0 items-center justify-center rounded-xl border border-zinc-200 bg-white px-4 text-sm font-extrabold"
+            >
+              Refresh
+            </button>
+          </div>
+        </div>
       )}
+
+      {/* OVERVIEW */}
+      {tab === "OVERVIEW" && (
+        <>
+          <div className="grid grid-cols-2 gap-3">
+            <Card title="Bankroll">
+              <div className="text-2xl font-extrabold">{fmtMoney(currentBankroll)}</div>
+              <div className="mt-1 text-xs text-zinc-600">Starting bankroll + all-time profit</div>
+            </Card>
+
+            <Card title="Profit (Range)">
+              <div
+                className="text-2xl font-extrabold"
+                style={{ color: profitColor(summary.totalProfit) }}
+              >
+                {fmtMoney(summary.totalProfit)}
+              </div>
+              <div className="mt-1 text-xs text-zinc-600">{summary.roi.toFixed(2)}% ROI</div>
+            </Card>
+
+            <Card title="Total Bet (Range)">
+              <div className="text-2xl font-extrabold">{fmtMoney(summary.totalBet)}</div>
+              <div className="mt-1 text-xs text-zinc-600">Settled tickets only</div>
+            </Card>
+
+            <Card title="Record (Range)">
+              <div className="text-2xl font-extrabold">{summary.record}</div>
+              <div className="mt-1 text-xs text-zinc-600">
+                {fmtNumber(settledTicketsInRange.length)} settled tickets
+              </div>
+            </Card>
+          </div>
+
+          <div className="mt-4 rounded-2xl border border-zinc-200 bg-white p-4 shadow-[0_1px_0_rgba(0,0,0,0.03)]">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-extrabold uppercase tracking-wide text-zinc-500">
+                  Graph
+                </div>
+                <div className="mt-1 text-sm font-extrabold">
+                  {graphMode === "PROFIT" ? "Profit (Range)" : "Bankroll"}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {/* ✅ Profit first + default */}
+                <button
+                  onClick={() => setGraphMode("PROFIT")}
+                  className="h-10 rounded-xl border border-zinc-200 px-3 text-sm font-extrabold"
+                  style={{
+                    background: graphMode === "PROFIT" ? "#111" : "white",
+                    color: graphMode === "PROFIT" ? "white" : "#111",
+                  }}
+                >
+                  Profit
+                </button>
+
+                <button
+                  onClick={() => setGraphMode("BANKROLL")}
+                  className="h-10 rounded-xl border border-zinc-200 px-3 text-sm font-extrabold"
+                  style={{
+                    background: graphMode === "BANKROLL" ? "#111" : "white",
+                    color: graphMode === "BANKROLL" ? "white" : "#111",
+                  }}
+                >
+                  Bankroll
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-4 h-64">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={chartData}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="date" tick={{ fontSize: 11 }} minTickGap={24} />
+                  <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => fmtMoneyCompact(Number(v))} />
+                  <Tooltip content={<CustomTooltip />} />
+
+                  {graphMode === "BANKROLL" ? (
+                    <>
+                      <Line
+                        type="monotone"
+                        dataKey="bankroll"
+                        name="Bankroll"
+                        strokeWidth={2}
+                        dot={false}
+                        connectNulls
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <Area type="monotone" dataKey="profitPos" name="Profit" dot={false} />
+                      <Area type="monotone" dataKey="profitNeg" name="Profit" dot={false} />
+                      <Line
+                        type="monotone"
+                        dataKey="profitInRange"
+                        name="Profit"
+                        strokeWidth={2}
+                        dot={false}
+                        connectNulls
+                      />
+                    </>
+                  )}
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* OPEN (no filtering) */}
+      {tab === "OPEN" && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="text-lg font-extrabold">
+              Open Tickets ({fmtNumber(openTicketsAll.length)})
+            </div>
+            <button
+              onClick={() => loadTicketsAndLegs()}
+              className="inline-flex h-10 items-center justify-center rounded-xl border border-zinc-200 bg-white px-4 text-sm font-extrabold"
+            >
+              Refresh
+            </button>
+          </div>
+
+          <TicketList
+            tickets={openTicketsAll}
+            mode="OPEN_ACTIONS"
+            onQuickSettle={quickSettleTicket}
+            quickUpdatingId={quickUpdatingId}
+          />
+        </div>
+      )}
+
+      {/* CALENDAR */}
+      {tab === "CALENDAR" && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <button
+              onClick={() => {
+                const prev = new Date(calendarMonthStart);
+                prev.setMonth(prev.getMonth() - 1);
+                setCalendarMonth(startOfMonth(prev));
+                setSelectedDay(null);
+              }}
+              className="inline-flex h-10 items-center justify-center rounded-xl border border-zinc-200 bg-white px-3 text-sm font-extrabold"
+            >
+              ←
+            </button>
+
+            <div className="text-lg font-extrabold">{monthLabel(calendarMonthStart)}</div>
+
+            <button
+              onClick={() => {
+                const next = new Date(calendarMonthStart);
+                next.setMonth(next.getMonth() + 1);
+                setCalendarMonth(startOfMonth(next));
+                setSelectedDay(null);
+              }}
+              className="inline-flex h-10 items-center justify-center rounded-xl border border-zinc-200 bg-white px-3 text-sm font-extrabold"
+            >
+              →
+            </button>
+          </div>
+
+          <div className="grid grid-cols-7 gap-2 text-xs font-extrabold text-zinc-500">
+            {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
+              <div key={d} className="px-1">
+                {d}
+              </div>
+            ))}
+          </div>
+
+          <div className="grid grid-cols-7 gap-2">
+            {buildCalendarGrid(calendarMonthStart).map((cell, idx) => {
+              if (!cell.date) return <div key={idx} className="h-20 rounded-xl" />;
+
+              const key = yyyyMmDd(cell.date);
+              const total = round2(dayTotals.get(key) ?? 0);
+              const isSelected = selectedDay === key;
+
+              return (
+                <button
+                  key={key}
+                  onClick={() => setSelectedDay(key)}
+                  className="h-20 rounded-xl border border-zinc-200 bg-white p-2 text-left"
+                  style={{
+                    outline: isSelected ? "2px solid #111" : "none",
+                    outlineOffset: 2,
+                  }}
+                >
+                  <div className="text-sm font-extrabold">{cell.date.getDate()}</div>
+                  <div
+                    className="mt-1 text-xs font-extrabold"
+                    style={{ color: total > 0 ? "#0f7a2a" : total < 0 ? "#b00020" : "#666" }}
+                  >
+                    {total === 0 ? "—" : fmtMoney(total)}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {selectedDay ? (
+            <div className="mt-2 rounded-2xl border border-zinc-200 bg-white p-4 shadow-[0_1px_0_rgba(0,0,0,0.03)]">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-sm font-extrabold">Bets on {selectedDay}</div>
+                <button
+                  onClick={() => setSelectedDay(null)}
+                  className="inline-flex h-9 items-center justify-center rounded-xl border border-zinc-200 bg-white px-3 text-xs font-extrabold"
+                >
+                  Close
+                </button>
+              </div>
+
+              <div className="mt-3">
+                <TicketList tickets={ticketsForSelectedDay} mode="LINK" />
+              </div>
+            </div>
+          ) : null}
+        </div>
+      )}
+
+      {/* PERSONAL */}
+      {tab === "PERSONAL" && (
+        <div className="space-y-3">
+          <Card title="Account" subtitle={userEmail || "—"}>
+            <div className="text-sm text-zinc-700">
+              Your data is tied to your Supabase session.
+            </div>
+          </Card>
+
+          <Card title="Starting Bankroll">
+            {profileLoading ? (
+              <div className="text-sm font-bold text-zinc-600">Loading…</div>
+            ) : (
+              <div className="space-y-2">
+                <input
+                  type="number"
+                  value={startingBankroll}
+                  onChange={(e) => setStartingBankroll(Number(e.target.value))}
+                  className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base font-bold"
+                />
+                <button
+                  onClick={saveStartingBankroll}
+                  className="inline-flex h-11 items-center justify-center rounded-xl bg-black px-4 text-sm font-extrabold text-white"
+                >
+                  {profileSaving ? "Saving…" : "Save"}
+                </button>
+              </div>
+            )}
+          </Card>
+
+          <Card title="Unit Size">
+            <div className="text-2xl font-extrabold">{fmtMoney(unitCard.unitSize)}</div>
+            <div className="mt-1 text-xs text-zinc-600">
+              Based on ending bankroll {fmtMoney(unitCard.prevMonthEndingBankroll)} (prev month end)
+            </div>
+          </Card>
+
+          <Card title="Experience">
+            {experience ? (
+              <div className="text-2xl font-extrabold">
+                {experience.years}y {experience.months}m {experience.days}d
+              </div>
+            ) : (
+              <div className="text-sm font-bold text-zinc-600">
+                Add your first ticket to start tracking experience.
+              </div>
+            )}
+          </Card>
+        </div>
+      )}
+
+      {/* Bottom App Tabs */}
+      <div className="fixed bottom-0 left-0 right-0 border-t border-zinc-200 bg-white">
+        <div className="mx-auto flex max-w-2xl">
+          <BottomTabButton id="OVERVIEW" label="Overview" />
+          <BottomTabButton id="OPEN" label="Open" />
+          <BottomTabButton id="CALENDAR" label="Calendar" />
+          <BottomTabButton id="PERSONAL" label="Personal" />
+        </div>
+      </div>
     </div>
   );
 }
