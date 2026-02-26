@@ -1,8 +1,3 @@
-/* =========================================================
-   PASTE THIS FILE AT:
-   /app/ticket/[id]/page.tsx
-   ========================================================= */
-
 "use client";
 
 import Link from "next/link";
@@ -56,9 +51,7 @@ function isoToYyyyMmDd(iso: string) {
 }
 
 function americanToDecimal(american: number): number {
-  if (!Number.isFinite(american) || american === 0) {
-    throw new Error("Invalid American odds");
-  }
+  if (!Number.isFinite(american) || american === 0) throw new Error("Invalid American odds");
   if (american > 0) return 1 + american / 100;
   return 1 + 100 / Math.abs(american);
 }
@@ -74,46 +67,15 @@ function profitColor(n: number) {
 }
 
 function FieldLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <div style={{ fontSize: 12, fontWeight: 700, opacity: 0.75, marginBottom: 6 }}>
-      {children}
-    </div>
-  );
+  return <div className="text-xs font-bold opacity-70">{children}</div>;
 }
-
-const cardStyle: React.CSSProperties = {
-  border: "1px solid #eee",
-  borderRadius: 14,
-  padding: 16,
-  boxShadow: "0 1px 0 rgba(0,0,0,0.03)",
-  background: "#fff",
-};
-
-const inputStyle: React.CSSProperties = {
-  width: "100%",
-  padding: "10px 12px",
-  borderRadius: 10,
-  border: "1px solid #d9d9d9",
-  outline: "none",
-};
-
-const selectStyle: React.CSSProperties = {
-  ...inputStyle,
-  background: "#fff",
-};
-
-const rowStyle: React.CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "repeat(12, minmax(0, 1fr))",
-  gap: 12,
-};
 
 function mapTicketStatusToLegStatus(s: TicketStatus): Leg["status"] {
   if (s === "won") return "won";
   if (s === "lost") return "lost";
   if (s === "push") return "push";
   if (s === "void") return "void";
-  return "open"; // open/partial -> open
+  return "open";
 }
 
 export default function TicketPage() {
@@ -125,22 +87,23 @@ export default function TicketPage() {
   const [ticket, setTicket] = useState<Ticket | null>(null);
   const [legs, setLegs] = useState<Leg[]>([]);
 
-  // Editable fields
   const [placedDate, setPlacedDate] = useState<string>("");
   const [book, setBook] = useState<string>("");
   const [league, setLeague] = useState<string>("");
 
-  // ✅ Bet Mode + inputs (strings to avoid NaN / clearing issues)
   const [betMode, setBetMode] = useState<"risk" | "towin">("risk");
-  const [betInput, setBetInput] = useState<string>("0"); // stake / risk
-  const [toWinInput, setToWinInput] = useState<string>(""); // profit target
+  const [betInput, setBetInput] = useState<string>("0");
+  const [toWinInput, setToWinInput] = useState<string>("");
 
-  // Singles status
   const [singleStatus, setSingleStatus] = useState<TicketStatus>("open");
 
-  // Payout override input (only override if edited)
   const [payoutInput, setPayoutInput] = useState<string>("");
   const [payoutEdited, setPayoutEdited] = useState<boolean>(false);
+
+  const inputClass =
+    "h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base";
+  const cardClass =
+    "rounded-2xl border border-zinc-200 bg-white p-4 shadow-[0_1px_0_rgba(0,0,0,0.03)]";
 
   useEffect(() => {
     async function load() {
@@ -148,9 +111,7 @@ export default function TicketPage() {
 
       const { data: t, error: tErr } = await supabase
         .from("tickets")
-        .select(
-          "id, placed_at, settled_at, ticket_type, stake, status, book, payout, profit, notes, league"
-        )
+        .select("id, placed_at, settled_at, ticket_type, stake, status, book, payout, profit, notes, league")
         .eq("id", id)
         .single();
 
@@ -183,9 +144,7 @@ export default function TicketPage() {
       setBook(ticketRow.book ?? "");
       setLeague(ticketRow.league ?? "");
 
-      // ✅ stake as string input
       setBetInput(String(ticketRow.stake ?? 0));
-
       setSingleStatus(ticketRow.status);
 
       setPayoutInput(ticketRow.payout === null ? "" : String(ticketRow.payout));
@@ -213,14 +172,12 @@ export default function TicketPage() {
     return "push";
   }, [ticket, legs]);
 
-  // ✅ Single: keep leg status in UI synced to ticket status
   useEffect(() => {
     if (!ticket || ticket.ticket_type !== "single") return;
     const mapped = mapTicketStatusToLegStatus(singleStatus);
     setLegs((prev) => prev.map((l) => ({ ...l, status: mapped })));
   }, [ticket, singleStatus]);
 
-  // ✅ Effective multiplier used for To Win calc (single = its leg; parlay = product; push/void = 1)
   const { multiplier, multiplierValid } = useMemo(() => {
     try {
       if (!ticket) return { multiplier: 1, multiplierValid: false };
@@ -232,7 +189,6 @@ export default function TicketPage() {
         return { multiplier: americanToDecimal(a), multiplierValid: true };
       }
 
-      // parlay
       if (legs.length < 2) return { multiplier: 1, multiplierValid: false };
 
       let m = 1;
@@ -271,7 +227,6 @@ export default function TicketPage() {
     setBetInput(String(round2(stake)));
   }
 
-  // ✅ Keep paired field synced when multiplier changes (e.g. leg status changes)
   useEffect(() => {
     if (!multiplierValid) return;
     if (betMode === "risk") setToWinFromRisk(betInput);
@@ -285,11 +240,8 @@ export default function TicketPage() {
   }, [betInput]);
 
   const computedPayoutProfit = useMemo(() => {
-    if (!ticket) {
-      return { payout: null as number | null, profit: null as number | null };
-    }
+    if (!ticket) return { payout: null as number | null, profit: null as number | null };
 
-    // Override only if user edited
     if (payoutEdited && payoutInput.trim() !== "") {
       const payoutNum = Number(payoutInput);
       if (Number.isFinite(payoutNum)) {
@@ -301,7 +253,6 @@ export default function TicketPage() {
 
     if (ticket.ticket_type === "single") {
       const status = singleStatus;
-
       if (status === "open" || status === "partial") return { payout: null, profit: null };
       if (status === "push" || status === "void") return { payout: round2(stakeNum), profit: 0 };
       if (legs.length !== 1) return { payout: null, profit: null };
@@ -313,9 +264,7 @@ export default function TicketPage() {
       return { payout, profit };
     }
 
-    // parlay
     const pStatus: ParlayStatus = derivedParlayStatus ?? "open";
-
     if (pStatus === "open") return { payout: null, profit: null };
     if (pStatus === "push" || pStatus === "void") return { payout: round2(stakeNum), profit: 0 };
     if (pStatus === "lost") return { payout: 0, profit: round2(0 - stakeNum) };
@@ -334,16 +283,10 @@ export default function TicketPage() {
   async function saveTicketEdits() {
     if (!ticket) return;
 
-    if (!placedDate) {
-      alert("Please select a date.");
-      return;
-    }
+    if (!placedDate) return alert("Please select a date.");
 
     const stake = Number(betInput);
-    if (!Number.isFinite(stake) || stake <= 0) {
-      alert("Please enter a valid bet amount.");
-      return;
-    }
+    if (!Number.isFinite(stake) || stake <= 0) return alert("Please enter a valid bet amount.");
 
     const placedAtIso = new Date(placedDate + "T00:00:00").toISOString();
     const leagueToStore = league.trim() === "" ? null : league.trim();
@@ -375,16 +318,11 @@ export default function TicketPage() {
       return;
     }
 
-    // ✅ Single: force leg status in DB to match ticket status
     if (ticket.ticket_type === "single") {
       const mapped = mapTicketStatusToLegStatus(statusToStore);
       const firstLegId = legs[0]?.id;
       if (firstLegId) {
-        const { error: legErr } = await supabase
-          .from("legs")
-          .update({ status: mapped })
-          .eq("id", firstLegId);
-
+        const { error: legErr } = await supabase.from("legs").update({ status: mapped }).eq("id", firstLegId);
         if (legErr) {
           console.error(legErr);
           alert("Saved ticket, but failed to sync single leg status.");
@@ -400,13 +338,11 @@ export default function TicketPage() {
 
   async function saveLegStatus(legId: string, nextStatus: Leg["status"]) {
     const { error } = await supabase.from("legs").update({ status: nextStatus }).eq("id", legId);
-
     if (error) {
       console.error(error);
       alert("Failed to update leg.");
       return;
     }
-
     setLegs((prev) => prev.map((l) => (l.id === legId ? { ...l, status: nextStatus } : l)));
   }
 
@@ -432,53 +368,44 @@ export default function TicketPage() {
     router.refresh();
   }
 
-  if (loading) return <div style={{ padding: 24 }}>Loading…</div>;
-  if (!ticket) return <div style={{ padding: 24 }}>Not found.</div>;
+  if (loading) return <div className="px-4 py-6">Loading…</div>;
+  if (!ticket) return <div className="px-4 py-6">Not found.</div>;
 
   return (
-    <div style={{ padding: 24, fontFamily: "system-ui", maxWidth: 980, margin: "0 auto" }}>
+    <div className="mx-auto w-full max-w-5xl px-4 py-5 sm:px-6">
       {/* Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <div style={{ fontSize: 12, opacity: 0.7 }}>Ticket</div>
-          <h1 style={{ margin: 0, fontSize: 28 }}>
+          <div className="text-xs opacity-70">Ticket</div>
+          <h1 className="text-2xl font-black tracking-tight sm:text-3xl">
             {ticket.league ?? "—"} • {ticket.ticket_type.toUpperCase()}
           </h1>
-          <div style={{ marginTop: 6, fontSize: 12, opacity: 0.7 }}>
+          <div className="mt-1 text-xs opacity-70">
             ID:{" "}
-            <span style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>
-              {ticket.id}
-            </span>
+            <span className="font-mono">{ticket.id}</span>
           </div>
         </div>
 
         <Link
           href="/"
-          style={{
-            textDecoration: "none",
-            border: "1px solid #ddd",
-            padding: "10px 12px",
-            borderRadius: 10,
-            fontWeight: 800,
-            color: "#111",
-            background: "#fff",
-          }}
+          className="inline-flex h-11 items-center justify-center rounded-xl border border-zinc-200 bg-white px-4 font-bold"
         >
           Home
         </Link>
       </div>
 
       {/* Summary */}
-      <div style={{ ...cardStyle, marginBottom: 14 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+      <div className={`${cardClass} mt-4`}>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:items-end">
           <div>
-            <div style={{ fontSize: 12, opacity: 0.7 }}>Computed Profit</div>
+            <div className="text-xs opacity-70">Computed Profit</div>
             <div
+              className="mt-1 text-2xl font-black"
               style={{
-                fontSize: 22,
-                fontWeight: 900,
                 color:
-                  computedPayoutProfit.profit === null ? "#111" : profitColor(computedPayoutProfit.profit),
+                  computedPayoutProfit.profit === null
+                    ? "#111"
+                    : profitColor(computedPayoutProfit.profit),
               }}
             >
               {computedPayoutProfit.profit === null ? "—" : computedPayoutProfit.profit.toFixed(2)}
@@ -486,38 +413,38 @@ export default function TicketPage() {
           </div>
 
           <div>
-            <div style={{ fontSize: 12, opacity: 0.7 }}>Computed Payout</div>
-            <div style={{ fontSize: 22, fontWeight: 900 }}>
+            <div className="text-xs opacity-70">Computed Payout</div>
+            <div className="mt-1 text-2xl font-black">
               {computedPayoutProfit.payout === null ? "—" : computedPayoutProfit.payout.toFixed(2)}
             </div>
           </div>
 
           {ticket.ticket_type === "single" && (
-            <div style={{ fontSize: 12, opacity: 0.7, alignSelf: "flex-end" }}>
+            <div className="text-xs opacity-70 sm:text-right">
               Single: leg status mirrors ticket status
             </div>
           )}
         </div>
       </div>
 
-      {/* Ticket fields */}
-      <div style={cardStyle}>
-        <div style={{ fontWeight: 900, marginBottom: 12 }}>Details</div>
+      {/* Details */}
+      <div className={`${cardClass} mt-4`}>
+        <div className="mb-3 font-black">Details</div>
 
-        <div style={rowStyle}>
-          <div style={{ gridColumn: "span 3" }}>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-1.5">
             <FieldLabel>Type</FieldLabel>
-            <input value={ticket.ticket_type} disabled style={{ ...inputStyle, opacity: 0.7 }} />
+            <input value={ticket.ticket_type} disabled className={inputClass + " opacity-70"} />
           </div>
 
-          <div style={{ gridColumn: "span 3" }}>
+          <div className="grid gap-1.5">
             <FieldLabel>League</FieldLabel>
             <input
               list="league-options"
               value={league}
               onChange={(e) => setLeague(e.target.value)}
               placeholder="Select or type…"
-              style={inputStyle}
+              className={inputClass}
             />
             <datalist id="league-options">
               {LEAGUE_OPTIONS.map((l) => (
@@ -526,61 +453,65 @@ export default function TicketPage() {
             </datalist>
           </div>
 
-          <div style={{ gridColumn: "span 3" }}>
+          <div className="grid gap-1.5">
             <FieldLabel>Date</FieldLabel>
-            <input type="date" value={placedDate} onChange={(e) => setPlacedDate(e.target.value)} style={inputStyle} />
+            <input
+              type="date"
+              value={placedDate}
+              onChange={(e) => setPlacedDate(e.target.value)}
+              className={inputClass}
+            />
           </div>
 
-          <div style={{ gridColumn: "span 3" }}>
+          <div className="grid gap-1.5">
             <FieldLabel>Book</FieldLabel>
-            <input value={book} onChange={(e) => setBook(e.target.value)} placeholder="FanDuel, DK…" style={inputStyle} />
+            <input
+              value={book}
+              onChange={(e) => setBook(e.target.value)}
+              placeholder="FanDuel, DK…"
+              className={inputClass}
+            />
           </div>
 
-          {/* ✅ Bet mode toggle */}
-          <div style={{ gridColumn: "span 6" }}>
+          {/* Bet Mode */}
+          <div className="grid gap-1.5 sm:col-span-2 lg:col-span-2">
             <FieldLabel>Bet input mode</FieldLabel>
-            <div style={{ display: "flex", gap: 10, alignItems: "center", height: 42 }}>
-              <label style={{ display: "flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
-                <input
-                  type="radio"
-                  name="betMode"
-                  checked={betMode === "risk"}
-                  onChange={() => {
-                    setBetMode("risk");
-                    setToWinFromRisk(betInput);
-                  }}
-                />
-                <span style={{ fontWeight: 800 }}>Risk (Stake)</span>
-              </label>
+            <div className="flex flex-col gap-2 rounded-xl border border-zinc-200 bg-white p-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
+                <label className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    name="betMode"
+                    checked={betMode === "risk"}
+                    onChange={() => {
+                      setBetMode("risk");
+                      setToWinFromRisk(betInput);
+                    }}
+                  />
+                  <span className="font-bold">Risk (Stake)</span>
+                </label>
 
-              <label style={{ display: "flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
-                <input
-                  type="radio"
-                  name="betMode"
-                  checked={betMode === "towin"}
-                  onChange={() => {
-                    setBetMode("towin");
-                    setRiskFromToWin(toWinInput === "" ? "0" : toWinInput);
-                  }}
-                />
-                <span style={{ fontWeight: 800 }}>To Win (Profit)</span>
-              </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    name="betMode"
+                    checked={betMode === "towin"}
+                    onChange={() => {
+                      setBetMode("towin");
+                      setRiskFromToWin(toWinInput === "" ? "0" : toWinInput);
+                    }}
+                  />
+                  <span className="font-bold">To Win (Profit)</span>
+                </label>
+              </div>
 
-              <div style={{ marginLeft: "auto", fontSize: 12, opacity: 0.7 }}>
-                {multiplierValid ? (
-                  <>
-                    Multiplier: <b>{round2(multiplier).toFixed(2)}</b>
-                  </>
-                ) : (
-                  <>
-                    Multiplier: <b>—</b>
-                  </>
-                )}
+              <div className="text-xs opacity-70">
+                Multiplier: <b>{multiplierValid ? round2(multiplier).toFixed(2) : "—"}</b>
               </div>
             </div>
           </div>
 
-          <div style={{ gridColumn: "span 3" }}>
+          <div className="grid gap-1.5">
             <FieldLabel>Stake (Risk)</FieldLabel>
             <input
               type="number"
@@ -592,11 +523,12 @@ export default function TicketPage() {
                 if (betMode === "risk") setToWinFromRisk(next);
                 else setBetInput(next);
               }}
-              style={{ ...inputStyle, opacity: betMode === "risk" ? 1 : 0.85 }}
+              className={inputClass}
+              style={{ opacity: betMode === "risk" ? 1 : 0.85 }}
             />
           </div>
 
-          <div style={{ gridColumn: "span 3" }}>
+          <div className="grid gap-1.5">
             <FieldLabel>To Win (Profit)</FieldLabel>
             <input
               type="number"
@@ -609,18 +541,19 @@ export default function TicketPage() {
                 else setToWinInput(next);
               }}
               placeholder={betMode === "towin" ? "" : "Auto (switch to To Win)"}
-              style={{ ...inputStyle, opacity: betMode === "towin" ? 1 : 0.85 }}
+              className={inputClass}
+              style={{ opacity: betMode === "towin" ? 1 : 0.85 }}
             />
           </div>
 
-          <div style={{ gridColumn: "span 3" }}>
+          <div className="grid gap-1.5">
             <FieldLabel>Status</FieldLabel>
             <select
               value={ticket.ticket_type === "parlay" ? (derivedParlayStatus ?? "open") : singleStatus}
               onChange={(e) => setSingleStatus(e.target.value as TicketStatus)}
               disabled={ticket.ticket_type === "parlay"}
+              className={inputClass}
               style={{
-                ...selectStyle,
                 opacity: ticket.ticket_type === "parlay" ? 0.65 : 1,
                 cursor: ticket.ticket_type === "parlay" ? "not-allowed" : "pointer",
               }}
@@ -634,13 +567,13 @@ export default function TicketPage() {
             </select>
 
             {ticket.ticket_type === "parlay" && (
-              <div style={{ marginTop: 6, fontSize: 12, opacity: 0.7 }}>
+              <div className="text-xs opacity-70">
                 Derived: <b>{derivedParlayStatus ?? "open"}</b>
               </div>
             )}
           </div>
 
-          <div style={{ gridColumn: "span 6" }}>
+          <div className="grid gap-1.5 sm:col-span-2 lg:col-span-2">
             <FieldLabel>Actual payout (optional)</FieldLabel>
             <input
               type="number"
@@ -652,133 +585,86 @@ export default function TicketPage() {
                 setPayoutEdited(true);
               }}
               placeholder="Total return incl. bet"
-              style={inputStyle}
+              className={inputClass}
             />
           </div>
         </div>
       </div>
 
       {/* Legs */}
-      <div style={{ ...cardStyle, marginTop: 14 }}>
-        <div style={{ fontWeight: 900, marginBottom: 12 }}>Legs</div>
+      <div className={`${cardClass} mt-4`}>
+        <div className="mb-3 font-black">Legs</div>
 
-        <div style={{ display: "grid", gap: 10 }}>
+        <div className="grid gap-3">
           {legs.map((leg) => (
-            <div
-              key={leg.id}
-              style={{
-                border: "1px solid #eee",
-                borderRadius: 12,
-                padding: 12,
-                display: "grid",
-                gridTemplateColumns: "1fr 160px 160px",
-                gap: 10,
-                alignItems: "center",
-              }}
-            >
-              <div>
-                <div style={{ fontWeight: 800 }}>{leg.selection}</div>
-                <div style={{ marginTop: 4, fontSize: 12, opacity: 0.75 }}>
-                  Odds: {leg.american_odds > 0 ? `+${leg.american_odds}` : leg.american_odds}
-                </div>
-              </div>
-
-              <div>
-                <FieldLabel>Leg Status</FieldLabel>
-                <select
-                  value={leg.status}
-                  disabled={ticket.ticket_type === "single"}
-                  onChange={(e) => saveLegStatus(leg.id, e.target.value as Leg["status"])}
-                  style={{
-                    ...selectStyle,
-                    opacity: ticket.ticket_type === "single" ? 0.6 : 1,
-                    cursor: ticket.ticket_type === "single" ? "not-allowed" : "pointer",
-                  }}
-                >
-                  <option value="open">open</option>
-                  <option value="won">won</option>
-                  <option value="lost">lost</option>
-                  <option value="push">push</option>
-                  <option value="void">void</option>
-                </select>
-                {ticket.ticket_type === "single" && (
-                  <div style={{ marginTop: 6, fontSize: 12, opacity: 0.7 }}>
-                    Mirrors ticket status
+            <div key={leg.id} className="rounded-2xl border border-zinc-200 bg-white p-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:items-center">
+                <div>
+                  <div className="font-black">{leg.selection}</div>
+                  <div className="mt-1 text-xs opacity-70">
+                    Odds: {leg.american_odds > 0 ? `+${leg.american_odds}` : leg.american_odds}
                   </div>
-                )}
-              </div>
+                </div>
 
-              <div style={{ textAlign: "right" }}>
-                <div style={{ fontSize: 12, opacity: 0.7 }}>This leg</div>
-                <div style={{ fontWeight: 900 }}>{leg.status.toUpperCase()}</div>
+                <div className="grid gap-1.5">
+                  <FieldLabel>Leg Status</FieldLabel>
+                  <select
+                    value={leg.status}
+                    disabled={ticket.ticket_type === "single"}
+                    onChange={(e) => saveLegStatus(leg.id, e.target.value as Leg["status"])}
+                    className={inputClass}
+                    style={{
+                      opacity: ticket.ticket_type === "single" ? 0.65 : 1,
+                      cursor: ticket.ticket_type === "single" ? "not-allowed" : "pointer",
+                    }}
+                  >
+                    <option value="open">open</option>
+                    <option value="won">won</option>
+                    <option value="lost">lost</option>
+                    <option value="push">push</option>
+                    <option value="void">void</option>
+                  </select>
+
+                  {ticket.ticket_type === "single" && (
+                    <div className="text-xs opacity-70">Mirrors ticket status</div>
+                  )}
+                </div>
+
+                <div className="sm:text-right">
+                  <div className="text-xs opacity-70">This leg</div>
+                  <div className="font-black">{leg.status.toUpperCase()}</div>
+                </div>
               </div>
             </div>
           ))}
         </div>
       </div>
 
-      {/* Bottom actions */}
-      <div
-        style={{
-          position: "sticky",
-          bottom: 0,
-          marginTop: 14,
-          paddingTop: 12,
-          paddingBottom: 12,
-          background: "rgba(255,255,255,0.9)",
-          backdropFilter: "blur(6px)",
-          borderTop: "1px solid #eee",
-          display: "flex",
-          gap: 10,
-          justifyContent: "space-between",
-          alignItems: "center",
-        }}
-      >
-        <button
-          onClick={deleteTicket}
-          style={{
-            border: "1px solid #f1c0c0",
-            background: "#fff",
-            color: "#b00020",
-            padding: "12px 14px",
-            borderRadius: 12,
-            fontWeight: 900,
-            cursor: "pointer",
-          }}
-        >
-          Delete
-        </button>
-
-        <div style={{ display: "flex", gap: 10 }}>
-          <Link
-            href="/"
-            style={{
-              textDecoration: "none",
-              border: "1px solid #ddd",
-              background: "#fff",
-              padding: "12px 14px",
-              borderRadius: 12,
-              fontWeight: 900,
-              color: "#111",
-            }}
-          >
-            Cancel
-          </Link>
-
+      {/* Sticky actions */}
+      <div className="sticky bottom-0 mt-4 border-t border-zinc-200 bg-white/90 py-3 backdrop-blur">
+        <div className="mx-auto flex w-full max-w-5xl flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <button
-            onClick={saveTicketEdits}
-            style={{
-              border: "1px solid #111",
-              background: "#111",
-              color: "#fff",
-              padding: "12px 14px",
-              borderRadius: 12,
-              fontWeight: 900,
-              cursor: "pointer",
-            }}
+            onClick={deleteTicket}
+            className="inline-flex h-11 items-center justify-center rounded-xl border border-red-200 bg-white px-4 font-bold text-red-700"
           >
-            Save
+            Delete
           </button>
+
+          <div className="flex flex-col gap-2 sm:flex-row sm:gap-3">
+            <Link
+              href="/"
+              className="inline-flex h-11 items-center justify-center rounded-xl border border-zinc-200 bg-white px-4 font-bold"
+            >
+              Cancel
+            </Link>
+
+            <button
+              onClick={saveTicketEdits}
+              className="inline-flex h-11 items-center justify-center rounded-xl border border-zinc-900 bg-zinc-900 px-4 font-black text-white"
+            >
+              Save
+            </button>
+          </div>
         </div>
       </div>
     </div>

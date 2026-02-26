@@ -49,60 +49,47 @@ type StatusFilter = "ALL" | Ticket["status"];
 function pad2(n: number) {
   return String(n).padStart(2, "0");
 }
-
 function yyyyMmDd(d: Date) {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }
-
 function startOfMonth(d: Date) {
   return new Date(d.getFullYear(), d.getMonth(), 1);
 }
-
 function endOfMonth(d: Date) {
   return new Date(d.getFullYear(), d.getMonth() + 1, 0);
 }
-
 function addDays(d: Date, days: number) {
   const copy = new Date(d);
   copy.setDate(copy.getDate() + days);
   return copy;
 }
-
 function toLocalMidnightIso(dateOnly: string) {
   return new Date(dateOnly + "T00:00:00").toISOString();
 }
-
 function fmtMoney(n: number) {
   return n.toFixed(2);
 }
-
 function fmtMoneyCompact(n: number) {
   const abs = Math.abs(n);
   if (abs >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (abs >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return n.toFixed(0);
 }
-
 function profitColor(n: number) {
   if (n > 0) return "#0f7a2a";
   if (n < 0) return "#b00020";
   return "#111";
 }
-
 function ticketDateForGrouping(t: Ticket) {
-  // ✅ Use placed_at only
   const d = new Date(t.placed_at);
   return yyyyMmDd(new Date(d.getFullYear(), d.getMonth(), d.getDate()));
 }
-
 function round2(n: number) {
   return Math.round(n * 100) / 100;
 }
-
 function lastDayOfPreviousMonth(now: Date) {
   return new Date(now.getFullYear(), now.getMonth(), 0);
 }
-
 function computeUnitSize(prevMonthEndingBankroll: number) {
   const raw = prevMonthEndingBankroll * 0.05;
   const roundedDown = Math.floor(raw / 50) * 50;
@@ -110,29 +97,17 @@ function computeUnitSize(prevMonthEndingBankroll: number) {
   return Math.min(10_000, nonNegative);
 }
 
-function prettyStatus(s: Ticket["status"]) {
-  return s.toUpperCase();
-}
-
 function CustomTooltip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
   const p = payload[0];
   const value = typeof p?.value === "number" ? p.value : null;
+
   return (
-    <div
-      style={{
-        background: "rgba(255,255,255,0.95)",
-        border: "1px solid #eee",
-        borderRadius: 12,
-        padding: "10px 12px",
-        boxShadow: "0 10px 30px rgba(0,0,0,0.08)",
-        fontSize: 12,
-      }}
-    >
-      <div style={{ fontWeight: 900, marginBottom: 6 }}>{label}</div>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-        <span style={{ opacity: 0.7 }}>{p?.name}</span>
-        <span style={{ fontWeight: 900 }}>{value === null ? "—" : fmtMoney(value)}</span>
+    <div className="rounded-xl border border-zinc-200 bg-white/95 px-3 py-2 text-xs shadow-[0_10px_30px_rgba(0,0,0,0.08)]">
+      <div className="mb-1 font-black">{label}</div>
+      <div className="flex items-center justify-between gap-3">
+        <span className="opacity-70">{p?.name}</span>
+        <span className="font-black">{value === null ? "—" : fmtMoney(value)}</span>
       </div>
     </div>
   );
@@ -142,7 +117,6 @@ export default function DashboardPage() {
   const router = useRouter();
 
   const [authChecked, setAuthChecked] = useState(false);
-
   const [loading, setLoading] = useState(true);
   const [tickets, setTickets] = useState<Ticket[]>([]);
 
@@ -153,12 +127,12 @@ export default function DashboardPage() {
   const [leagueFilter, setLeagueFilter] = useState<string>("ALL");
 
   const [preset, setPreset] = useState<DatePreset>("MTD");
-  const [customStart, setCustomStart] = useState<string>(() => yyyyMmDd(addDays(new Date(), -29)));
+  const [customStart, setCustomStart] = useState<string>(() =>
+    yyyyMmDd(addDays(new Date(), -29))
+  );
   const [customEnd, setCustomEnd] = useState<string>(() => yyyyMmDd(new Date()));
 
   const [graphMode, setGraphMode] = useState<GraphMode>("BANKROLL");
-
-  // ✅ NEW: status filter + open separation
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
 
   useEffect(() => {
@@ -246,9 +220,7 @@ export default function DashboardPage() {
 
     setProfileSaving(false);
 
-    if (error) {
-      alert(error.message);
-    }
+    if (error) alert(error.message);
   }
 
   useEffect(() => {
@@ -280,24 +252,17 @@ export default function DashboardPage() {
 
   const { rangeStart, rangeEndInclusive } = useMemo(() => {
     const now = new Date();
-    if (preset === "ALL") {
-      return { rangeStart: null as string | null, rangeEndInclusive: null as string | null };
-    }
-    if (preset === "CUSTOM") {
-      return { rangeStart: customStart || null, rangeEndInclusive: customEnd || null };
-    }
-    if (preset === "7D") {
-      return { rangeStart: yyyyMmDd(addDays(now, -6)), rangeEndInclusive: yyyyMmDd(now) };
-    }
-    if (preset === "30D") {
-      return { rangeStart: yyyyMmDd(addDays(now, -29)), rangeEndInclusive: yyyyMmDd(now) };
-    }
-    if (preset === "MTD") {
-      return { rangeStart: yyyyMmDd(startOfMonth(now)), rangeEndInclusive: yyyyMmDd(now) };
-    }
+    if (preset === "ALL") return { rangeStart: null as string | null, rangeEndInclusive: null as string | null };
+    if (preset === "CUSTOM") return { rangeStart: customStart || null, rangeEndInclusive: customEnd || null };
+    if (preset === "7D") return { rangeStart: yyyyMmDd(addDays(now, -6)), rangeEndInclusive: yyyyMmDd(now) };
+    if (preset === "30D") return { rangeStart: yyyyMmDd(addDays(now, -29)), rangeEndInclusive: yyyyMmDd(now) };
+    if (preset === "MTD") return { rangeStart: yyyyMmDd(startOfMonth(now)), rangeEndInclusive: yyyyMmDd(now) };
     if (preset === "LAST_MONTH") {
       const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      return { rangeStart: yyyyMmDd(startOfMonth(lastMonth)), rangeEndInclusive: yyyyMmDd(endOfMonth(lastMonth)) };
+      return {
+        rangeStart: yyyyMmDd(startOfMonth(lastMonth)),
+        rangeEndInclusive: yyyyMmDd(endOfMonth(lastMonth)),
+      };
     }
     return { rangeStart: null, rangeEndInclusive: null };
   }, [preset, customStart, customEnd]);
@@ -312,7 +277,8 @@ export default function DashboardPage() {
       : null;
 
     return tickets.filter((t) => {
-      const passLeague = leagueFilter === "ALL" ? true : (t.league ?? "") === leagueFilter;
+      const passLeague =
+        leagueFilter === "ALL" ? true : (t.league ?? "") === leagueFilter;
       const baseIso = t.placed_at;
       const passStart = !startIso ? true : baseIso >= startIso;
       const passEnd = !endExclusiveIso ? true : baseIso < endExclusiveIso;
@@ -386,7 +352,9 @@ export default function DashboardPage() {
       return acc;
     }, 0);
 
-    const prevMonthEndingBankroll = round2((Number(startingBankroll) || 0) + realizedProfitUpToPrevMonthEnd);
+    const prevMonthEndingBankroll = round2(
+      (Number(startingBankroll) || 0) + realizedProfitUpToPrevMonthEnd
+    );
     const unitSize = computeUnitSize(prevMonthEndingBankroll);
 
     return {
@@ -400,7 +368,8 @@ export default function DashboardPage() {
     const startIso = rangeStart ? toLocalMidnightIso(rangeStart) : null;
 
     const profitBeforeRange = tickets.reduce((acc, t) => {
-      const passLeague = leagueFilter === "ALL" ? true : (t.league ?? "") === leagueFilter;
+      const passLeague =
+        leagueFilter === "ALL" ? true : (t.league ?? "") === leagueFilter;
       if (!passLeague) return acc;
 
       if (startIso && t.placed_at < startIso) {
@@ -427,10 +396,11 @@ export default function DashboardPage() {
       runningBankroll += dayProfit;
       runningProfit += dayProfit;
 
-      const bankroll = round2(runningBankroll);
-      const cumulativeProfit = round2(runningProfit);
-
-      return { date: d, bankroll, cumulativeProfit };
+      return {
+        date: d,
+        bankroll: round2(runningBankroll),
+        cumulativeProfit: round2(runningProfit),
+      };
     });
   }, [filteredTickets, tickets, startingBankroll, leagueFilter, rangeStart]);
 
@@ -447,28 +417,29 @@ export default function DashboardPage() {
     [statusFilteredTickets]
   );
 
-  if (!authChecked) return <div style={{ padding: 24 }}>Checking session…</div>;
-  if (loading) return <div style={{ padding: 24 }}>Loading…</div>;
+  if (!authChecked) return <div className="px-4 py-6">Checking session…</div>;
+  if (loading) return <div className="px-4 py-6">Loading…</div>;
 
   return (
-    <div style={{ padding: 24, fontFamily: "system-ui", maxWidth: 1100 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h1 style={{ margin: 0 }}>Dashboard</h1>
+    <div className="mx-auto w-full max-w-6xl px-4 py-5 sm:px-6">
+      {/* Header */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <h1 className="text-2xl font-black tracking-tight">Dashboard</h1>
 
-        <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-          <Link href="/new">+ New Bet</Link>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+          <Link
+            href="/new"
+            className="inline-flex h-11 items-center justify-center rounded-xl border border-zinc-200 bg-white px-4 font-bold"
+          >
+            + New Bet
+          </Link>
+
           <button
             onClick={async () => {
               await supabase.auth.signOut();
               router.replace("/login");
             }}
-            style={{
-              padding: "6px 10px",
-              border: "1px solid #ddd",
-              borderRadius: 8,
-              background: "white",
-              cursor: "pointer",
-            }}
+            className="inline-flex h-11 items-center justify-center rounded-xl border border-zinc-200 bg-white px-4 font-bold"
           >
             Log out
           </button>
@@ -476,10 +447,14 @@ export default function DashboardPage() {
       </div>
 
       {/* Filters */}
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 12, alignItems: "flex-end" }}>
-        <label style={{ display: "grid", gap: 6 }}>
-          <span style={{ fontSize: 12, opacity: 0.7 }}>League</span>
-          <select value={leagueFilter} onChange={(e) => setLeagueFilter(e.target.value)} style={{ padding: "6px 8px" }}>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <label className="grid gap-1.5">
+          <span className="text-xs opacity-70">League</span>
+          <select
+            value={leagueFilter}
+            onChange={(e) => setLeagueFilter(e.target.value)}
+            className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
+          >
             <option value="ALL">All</option>
             {LEAGUE_OPTIONS.map((l) => (
               <option key={l} value={l}>
@@ -489,9 +464,13 @@ export default function DashboardPage() {
           </select>
         </label>
 
-        <label style={{ display: "grid", gap: 6 }}>
-          <span style={{ fontSize: 12, opacity: 0.7 }}>Date Range</span>
-          <select value={preset} onChange={(e) => setPreset(e.target.value as DatePreset)} style={{ padding: "6px 8px" }}>
+        <label className="grid gap-1.5">
+          <span className="text-xs opacity-70">Date Range</span>
+          <select
+            value={preset}
+            onChange={(e) => setPreset(e.target.value as DatePreset)}
+            className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
+          >
             <option value="7D">Last 7 Days</option>
             <option value="30D">Last 30 Days</option>
             <option value="MTD">MTD</option>
@@ -501,12 +480,12 @@ export default function DashboardPage() {
           </select>
         </label>
 
-        <label style={{ display: "grid", gap: 6 }}>
-          <span style={{ fontSize: 12, opacity: 0.7 }}>Status</span>
+        <label className="grid gap-1.5">
+          <span className="text-xs opacity-70">Status</span>
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
-            style={{ padding: "6px 8px" }}
+            className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
           >
             <option value="ALL">All</option>
             <option value="open">open</option>
@@ -520,48 +499,52 @@ export default function DashboardPage() {
 
         {preset === "CUSTOM" && (
           <>
-            <label style={{ display: "grid", gap: 6 }}>
-              <span style={{ fontSize: 12, opacity: 0.7 }}>Start</span>
-              <input type="date" value={customStart} onChange={(e) => setCustomStart(e.target.value)} style={{ padding: "6px 8px" }} />
+            <label className="grid gap-1.5">
+              <span className="text-xs opacity-70">Start</span>
+              <input
+                type="date"
+                value={customStart}
+                onChange={(e) => setCustomStart(e.target.value)}
+                className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
+              />
             </label>
-            <label style={{ display: "grid", gap: 6 }}>
-              <span style={{ fontSize: 12, opacity: 0.7 }}>End</span>
-              <input type="date" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} style={{ padding: "6px 8px" }} />
+
+            <label className="grid gap-1.5">
+              <span className="text-xs opacity-70">End</span>
+              <input
+                type="date"
+                value={customEnd}
+                onChange={(e) => setCustomEnd(e.target.value)}
+                className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
+              />
             </label>
           </>
         )}
       </div>
 
-      {/* Cards */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(0, 1fr))", gap: 12, marginTop: 16 }}>
-        <div style={{ border: "1px solid #eee", borderRadius: 10, padding: 12 }}>
-          <div style={{ fontSize: 12, opacity: 0.7 }}>Starting Bankroll</div>
+      {/* Stat Cards */}
+      <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {/* Starting Bankroll */}
+        <div className="rounded-2xl border border-zinc-200 bg-white p-4">
+          <div className="text-xs opacity-70">Starting Bankroll</div>
 
           {profileLoading ? (
-            <div style={{ marginTop: 8, opacity: 0.7 }}>Loading…</div>
+            <div className="mt-2 text-sm opacity-70">Loading…</div>
           ) : (
             <>
-              <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
+              <div className="mt-2">
                 <input
                   type="number"
                   value={startingBankroll}
                   onChange={(e) => setStartingBankroll(Number(e.target.value))}
-                  style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid #ddd" }}
+                  className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base"
                 />
               </div>
 
               <button
                 onClick={saveStartingBankroll}
                 disabled={profileSaving}
-                style={{
-                  marginTop: 8,
-                  padding: "6px 10px",
-                  border: "1px solid #ddd",
-                  borderRadius: 8,
-                  background: "white",
-                  cursor: profileSaving ? "default" : "pointer",
-                  width: "100%",
-                }}
+                className="mt-2 inline-flex h-11 w-full items-center justify-center rounded-xl border border-zinc-200 bg-white font-bold disabled:opacity-60"
               >
                 {profileSaving ? "Saving…" : "Save"}
               </button>
@@ -569,37 +552,50 @@ export default function DashboardPage() {
           )}
         </div>
 
-        <div style={{ border: "1px solid #eee", borderRadius: 10, padding: 12 }}>
-          <div style={{ fontSize: 12, opacity: 0.7 }}>Current Bankroll</div>
-          <div style={{ fontSize: 22, fontWeight: 800, color: profitColor(currentBankroll - startingBankroll) }}>
+        {/* Current Bankroll */}
+        <div className="rounded-2xl border border-zinc-200 bg-white p-4">
+          <div className="text-xs opacity-70">Current Bankroll</div>
+          <div
+            className="mt-1 text-2xl font-black"
+            style={{ color: profitColor(currentBankroll - startingBankroll) }}
+          >
             {fmtMoney(currentBankroll)}
           </div>
-          <div style={{ marginTop: 6, fontSize: 12, opacity: 0.7, lineHeight: 1.4 }}>Starting + all-time profit</div>
+          <div className="mt-1 text-xs leading-snug opacity-70">
+            Starting + all-time profit
+          </div>
         </div>
 
-        <div style={{ border: "1px solid #eee", borderRadius: 10, padding: 12 }}>
-          <div style={{ fontSize: 12, opacity: 0.7 }}>Total Profit</div>
-          <div style={{ fontSize: 22, fontWeight: 800, color: profitColor(summary.totalProfit) }}>
+        {/* Total Profit */}
+        <div className="rounded-2xl border border-zinc-200 bg-white p-4">
+          <div className="text-xs opacity-70">Total Profit</div>
+          <div
+            className="mt-1 text-2xl font-black"
+            style={{ color: profitColor(summary.totalProfit) }}
+          >
             {fmtMoney(summary.totalProfit)}
           </div>
         </div>
 
-        <div style={{ border: "1px solid #eee", borderRadius: 10, padding: 12 }}>
-          <div style={{ fontSize: 12, opacity: 0.7 }}>Total Bet</div>
-          <div style={{ fontSize: 22, fontWeight: 800 }}>{fmtMoney(summary.totalBet)}</div>
+        {/* Total Bet */}
+        <div className="rounded-2xl border border-zinc-200 bg-white p-4">
+          <div className="text-xs opacity-70">Total Bet</div>
+          <div className="mt-1 text-2xl font-black">{fmtMoney(summary.totalBet)}</div>
         </div>
 
-        <div style={{ border: "1px solid #eee", borderRadius: 10, padding: 12 }}>
-          <div style={{ fontSize: 12, opacity: 0.7 }}>ROI</div>
-          <div style={{ fontSize: 22, fontWeight: 800, color: profitColor(summary.roi) }}>
+        {/* ROI */}
+        <div className="rounded-2xl border border-zinc-200 bg-white p-4">
+          <div className="text-xs opacity-70">ROI</div>
+          <div className="mt-1 text-2xl font-black" style={{ color: profitColor(summary.roi) }}>
             {summary.roi.toFixed(2)}%
           </div>
         </div>
 
-        <div style={{ border: "1px solid #eee", borderRadius: 10, padding: 12 }}>
-          <div style={{ fontSize: 12, opacity: 0.7 }}>Unit Size</div>
-          <div style={{ fontSize: 22, fontWeight: 900 }}>{fmtMoney(unitCard.unitSize)}</div>
-          <div style={{ marginTop: 6, fontSize: 12, opacity: 0.7, lineHeight: 1.4 }}>
+        {/* Unit Size */}
+        <div className="rounded-2xl border border-zinc-200 bg-white p-4">
+          <div className="text-xs opacity-70">Unit Size</div>
+          <div className="mt-1 text-2xl font-black">{fmtMoney(unitCard.unitSize)}</div>
+          <div className="mt-1 text-xs leading-snug opacity-70">
             5% of {fmtMoney(unitCard.prevMonthEndingBankroll)}
             <br />
             Rounded down to nearest $50
@@ -612,35 +608,27 @@ export default function DashboardPage() {
       </div>
 
       {/* Chart */}
-      <div style={{ marginTop: 18, border: "1px solid #eee", borderRadius: 14, padding: 14, background: "#fff" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 8 }}>
-          <div style={{ fontWeight: 900 }}>{chartTitle}</div>
+      <div className="mt-5 rounded-2xl border border-zinc-200 bg-white p-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="font-black">{chartTitle}</div>
 
-          <div style={{ display: "flex", gap: 8 }}>
+          <div className="grid grid-cols-2 gap-2 sm:flex sm:gap-2">
             <button
               onClick={() => setGraphMode("BANKROLL")}
+              className="h-11 rounded-xl border border-zinc-200 px-3 font-extrabold"
               style={{
-                padding: "7px 10px",
-                border: "1px solid #ddd",
-                borderRadius: 10,
                 background: graphMode === "BANKROLL" ? "#111" : "white",
                 color: graphMode === "BANKROLL" ? "white" : "#111",
-                cursor: "pointer",
-                fontWeight: 800,
               }}
             >
               Bankroll
             </button>
             <button
               onClick={() => setGraphMode("PROFIT")}
+              className="h-11 rounded-xl border border-zinc-200 px-3 font-extrabold"
               style={{
-                padding: "7px 10px",
-                border: "1px solid #ddd",
-                borderRadius: 10,
                 background: graphMode === "PROFIT" ? "#111" : "white",
                 color: graphMode === "PROFIT" ? "white" : "#111",
-                cursor: "pointer",
-                fontWeight: 800,
               }}
             >
               Profit
@@ -648,7 +636,7 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        <div style={{ height: 280 }}>
+        <div className="mt-3 h-64 sm:h-72">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={chartData} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
               <defs>
@@ -659,13 +647,7 @@ export default function DashboardPage() {
               </defs>
 
               <CartesianGrid strokeDasharray="4 4" vertical={false} />
-              <XAxis
-                dataKey="date"
-                tick={{ fontSize: 12 }}
-                tickLine={false}
-                axisLine={false}
-                minTickGap={24}
-              />
+              <XAxis dataKey="date" tick={{ fontSize: 12 }} tickLine={false} axisLine={false} minTickGap={24} />
               <YAxis
                 tick={{ fontSize: 12 }}
                 tickLine={false}
@@ -674,56 +656,53 @@ export default function DashboardPage() {
               />
               <Tooltip content={<CustomTooltip />} />
               <Area type="monotone" dataKey={chartKey} fill="url(#chartFill)" stroke="none" />
-              <Line
-                type="monotone"
-                name={chartTitle}
-                dataKey={chartKey}
-                stroke="#111"
-                strokeWidth={2.5}
-                dot={false}
-                activeDot={{ r: 4 }}
-              />
+              <Line type="monotone" name={chartTitle} dataKey={chartKey} stroke="#111" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} />
             </LineChart>
           </ResponsiveContainer>
         </div>
       </div>
 
       {/* Tickets */}
-      <h2 style={{ marginTop: 22 }}>Tickets</h2>
+      <h2 className="mt-6 text-xl font-black">Tickets</h2>
 
       {statusFilter === "ALL" ? (
         <>
-          <div style={{ marginTop: 10, marginBottom: 8, fontWeight: 900 }}>
-            Open Tickets <span style={{ opacity: 0.6, fontWeight: 700 }}>({openTickets.length})</span>
+          <div className="mt-3 mb-2 font-black">
+            Open Tickets{" "}
+            <span className="font-bold opacity-60">({openTickets.length})</span>
           </div>
           <TicketList tickets={openTickets} />
 
-          <div style={{ marginTop: 18, marginBottom: 8, fontWeight: 900 }}>
-            Settled Tickets <span style={{ opacity: 0.6, fontWeight: 700 }}>({settledTickets.length})</span>
+          <div className="mt-5 mb-2 font-black">
+            Settled Tickets{" "}
+            <span className="font-bold opacity-60">({settledTickets.length})</span>
           </div>
           <TicketList tickets={settledTickets} />
         </>
       ) : (
-        <TicketList tickets={statusFilteredTickets} />
+        <div className="mt-3">
+          <TicketList tickets={statusFilteredTickets} />
+        </div>
       )}
     </div>
   );
 }
 
 function TicketList({ tickets }: { tickets: Ticket[] }) {
-  function profitColor(n: number) {
+  function profitColorLocal(n: number) {
     if (n > 0) return "#0f7a2a";
     if (n < 0) return "#b00020";
     return "#111";
   }
-  function fmtMoney(n: number) {
+  function fmtMoneyLocal(n: number) {
     return n.toFixed(2);
   }
-  function ticketDateForGrouping(t: Ticket) {
+  function ticketDateForGroupingLocal(t: Ticket) {
     const d = new Date(t.placed_at);
     const pad = (n: number) => String(n).padStart(2, "0");
-    const yyyyMmDd = (dd: Date) => `${dd.getFullYear()}-${pad(dd.getMonth() + 1)}-${pad(dd.getDate())}`;
-    return yyyyMmDd(new Date(d.getFullYear(), d.getMonth(), d.getDate()));
+    const yyyyMmDdLocal = (dd: Date) =>
+      `${dd.getFullYear()}-${pad(dd.getMonth() + 1)}-${pad(dd.getDate())}`;
+    return yyyyMmDdLocal(new Date(d.getFullYear(), d.getMonth(), d.getDate()));
   }
   function statusPillColor(s: Ticket["status"]) {
     if (s === "won") return "rgba(15, 122, 42, 0.12)";
@@ -733,64 +712,50 @@ function TicketList({ tickets }: { tickets: Ticket[] }) {
   }
 
   return (
-    <div style={{ display: "grid", gap: 10 }}>
-      {tickets.length === 0 && <div style={{ opacity: 0.7 }}>No tickets in this filter.</div>}
+    <div className="grid gap-3">
+      {tickets.length === 0 && <div className="text-sm opacity-70">No tickets in this filter.</div>}
 
       {tickets.map((t) => (
         <Link
           key={t.id}
           href={`/ticket/${t.id}`}
-          style={{
-            textDecoration: "none",
-            color: "inherit",
-            border: "1px solid #eee",
-            borderRadius: 14,
-            padding: 14,
-            display: "block",
-            background: "#fff",
-            boxShadow: "0 1px 0 rgba(0,0,0,0.03)",
-          }}
+          className="block rounded-2xl border border-zinc-200 bg-white p-4 no-underline shadow-[0_1px_0_rgba(0,0,0,0.03)]"
         >
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
-            <div style={{ display: "grid", gap: 6 }}>
-              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                <div style={{ fontWeight: 900 }}>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="grid gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="font-black">
                   {t.league ?? "—"} • {t.ticket_type.toUpperCase()}
                 </div>
+
                 <span
-                  style={{
-                    fontSize: 12,
-                    padding: "4px 8px",
-                    borderRadius: 999,
-                    border: "1px solid rgba(0,0,0,0.06)",
-                    background: statusPillColor(t.status),
-                    fontWeight: 900,
-                  }}
+                  className="rounded-full border border-black/5 px-2 py-1 text-xs font-black"
+                  style={{ background: statusPillColor(t.status) }}
                 >
                   {t.status.toUpperCase()}
                 </span>
               </div>
 
-              <div style={{ fontSize: 12, opacity: 0.75 }}>
-                Date: {ticketDateForGrouping(t)} • Book: {t.book ?? "—"}
+              <div className="text-xs opacity-75">
+                Date: {ticketDateForGroupingLocal(t)} • Book: {t.book ?? "—"}
               </div>
 
-              <div style={{ fontSize: 12, opacity: 0.75 }}>
-                Bet: {fmtMoney(t.stake)}
-                {typeof t.payout === "number" ? ` • Payout: ${fmtMoney(t.payout)}` : ""}
+              <div className="text-xs opacity-75">
+                Bet: {fmtMoneyLocal(t.stake)}
+                {typeof t.payout === "number" ? ` • Payout: ${fmtMoneyLocal(t.payout)}` : ""}
               </div>
             </div>
 
-            <div style={{ textAlign: "right", minWidth: 140 }}>
-              <div style={{ fontSize: 12, opacity: 0.7 }}>Profit</div>
+            <div className="sm:text-right">
+              <div className="text-xs opacity-70">Profit</div>
               <div
+                className="text-lg font-black"
                 style={{
-                  fontSize: 18,
-                  fontWeight: 900,
-                  color: typeof t.profit === "number" ? profitColor(t.profit) : "#111",
+                  color:
+                    typeof t.profit === "number" ? profitColorLocal(t.profit) : "#111",
                 }}
               >
-                {typeof t.profit === "number" ? fmtMoney(t.profit) : "—"}
+                {typeof t.profit === "number" ? fmtMoneyLocal(t.profit) : "—"}
               </div>
             </div>
           </div>
