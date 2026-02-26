@@ -82,6 +82,12 @@ function addDays(d: Date, days: number) {
 function round2(n: number) {
   return Math.round(n * 100) / 100;
 }
+
+function americanToDecimal(american: number): number {
+  if (!Number.isFinite(american) || american === 0) return 1;
+  if (american > 0) return 1 + american / 100;
+  return 1 + 100 / Math.abs(american);
+}
 function lastDayOfPreviousMonth(now: Date) {
   return new Date(now.getFullYear(), now.getMonth(), 0);
 }
@@ -534,21 +540,63 @@ export default function DashboardPage() {
   async function quickSettle(t: Ticket, status: Ticket["status"]) {
     setQuickUpdatingId(t.id);
 
-    let profit: number | null = t.profit ?? null;
-    let payout: number | null = t.payout ?? null;
+    const stake = Number(t.stake || 0);
+    const legs = legsByTicket[t.id] ?? [];
 
-    // Minimal auto-profit defaults (keeps your existing behavior stable):
-    // - lost: profit = -stake
-    // - push/void: profit = 0
-    // - won: keep existing profit unless you already store it elsewhere
-    if (status === "lost") profit = -Number(t.stake || 0);
-    if (status === "push" || status === "void") profit = 0;
+    // Compute payout/profit immediately
+    let payout: number | null = null;
+    let profit: number | null = null;
+
+    if (status === "open" || status === "partial") {
+      payout = null;
+      profit = null;
+    } else if (status === "lost") {
+      payout = 0;
+      profit = round2(0 - stake);
+    } else if (status === "push" || status === "void") {
+      payout = round2(stake);
+      profit = 0;
+    } else if (status === "won") {
+      // WIN: compute from odds
+      if (t.ticket_type === "single") {
+        const a = legs[0]?.american_odds;
+        if (Number.isFinite(a) && a !== 0) {
+          const dec = americanToDecimal(a);
+          payout = round2(stake * dec);
+          profit = round2(payout - stake);
+        } else {
+          // if missing odds, still mark as won but leave payout/profit blank
+          payout = null;
+          profit = null;
+        }
+      } else {
+        // parlay: multiply all leg decimals (assume "Win" means all legs won)
+        let m = 1;
+        let anyValid = false;
+
+        for (const l of legs) {
+          const a = l.american_odds;
+          if (Number.isFinite(a) && a !== 0) {
+            m *= americanToDecimal(a);
+            anyValid = true;
+          }
+        }
+
+        if (anyValid && m > 1) {
+          payout = round2(stake * m);
+          profit = round2(payout - stake);
+        } else {
+          payout = null;
+          profit = null;
+        }
+      }
+    }
 
     const patch: Partial<Ticket> = {
       status,
-      profit,
       payout,
-      settled_at: new Date().toISOString(),
+      profit,
+      settled_at: status === "open" || status === "partial" ? null : new Date().toISOString(),
     };
 
     // optimistic local state update (instant UI + metrics refresh)
@@ -565,7 +613,7 @@ export default function DashboardPage() {
       return;
     }
 
-    // keep data perfectly in sync (also clears any edge cases)
+    // keep data perfectly in sync
     await loadTicketsAndLegs();
   }
 
