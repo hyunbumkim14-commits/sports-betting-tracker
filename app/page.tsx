@@ -80,7 +80,7 @@ function profitColor(n: number) {
 }
 
 function ticketDateForGrouping(t: Ticket) {
-  // ✅ You said placed/settled should always be same day, so use placed_at
+  // ✅ Use placed_at only
   const d = new Date(t.placed_at);
   return yyyyMmDd(new Date(d.getFullYear(), d.getMonth(), d.getDate()));
 }
@@ -116,6 +116,11 @@ export default function DashboardPage() {
 
   const [loading, setLoading] = useState(true);
   const [tickets, setTickets] = useState<Ticket[]>([]);
+
+  // ✅ Starting bankroll (Option A: profiles table)
+  const [startingBankroll, setStartingBankroll] = useState<number>(0);
+  const [profileLoading, setProfileLoading] = useState(true);
+  const [profileSaving, setProfileSaving] = useState(false);
 
   // League filter
   const [leagueFilter, setLeagueFilter] = useState<string>("ALL");
@@ -154,6 +159,71 @@ export default function DashboardPage() {
       sub.subscription.unsubscribe();
     };
   }, [router]);
+
+  // ✅ Load profile (starting bankroll) after auth is confirmed
+  useEffect(() => {
+    if (!authChecked) return;
+    let alive = true;
+
+    async function loadProfile() {
+      setProfileLoading(true);
+
+      const { data: auth } = await supabase.auth.getUser();
+      const uid = auth.user?.id;
+      if (!uid) {
+        if (alive) setProfileLoading(false);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("starting_bankroll")
+        .eq("id", uid)
+        .single();
+
+      if (!error && data) {
+        if (alive) setStartingBankroll(Number(data.starting_bankroll) || 0);
+      } else {
+        // If profile row wasn't created (trigger not installed), create it.
+        const { error: upsertErr } = await supabase
+          .from("profiles")
+          .upsert({ id: uid, starting_bankroll: 0 });
+
+        if (!upsertErr && alive) setStartingBankroll(0);
+      }
+
+      if (alive) setProfileLoading(false);
+    }
+
+    loadProfile();
+
+    return () => {
+      alive = false;
+    };
+  }, [authChecked]);
+
+  async function saveStartingBankroll() {
+    setProfileSaving(true);
+
+    const { data: auth } = await supabase.auth.getUser();
+    const uid = auth.user?.id;
+    if (!uid) {
+      setProfileSaving(false);
+      return;
+    }
+
+    const safe = Number.isFinite(startingBankroll) ? startingBankroll : 0;
+
+    const { error } = await supabase
+      .from("profiles")
+      .upsert({ id: uid, starting_bankroll: safe });
+
+    setProfileSaving(false);
+
+    if (error) {
+      alert(error.message);
+    }
+  }
 
   // ✅ Only load tickets after auth is confirmed
   useEffect(() => {
@@ -279,6 +349,18 @@ export default function DashboardPage() {
     };
   }, [filteredTickets]);
 
+  // ✅ All-time profit (for current bankroll display)
+  const allTimeProfit = useMemo(() => {
+    return tickets.reduce((acc, t) => {
+      if (typeof t.profit === "number" && Number.isFinite(t.profit)) return acc + t.profit;
+      return acc;
+    }, 0);
+  }, [tickets]);
+
+  const currentBankroll = useMemo(() => {
+    return round2((Number(startingBankroll) || 0) + allTimeProfit);
+  }, [startingBankroll, allTimeProfit]);
+
   // ✅ Unit size (calculated from prev month ending bankroll, based on placed_at)
   const unitCard = useMemo(() => {
     const now = new Date();
@@ -294,8 +376,6 @@ export default function DashboardPage() {
       0
     ).toISOString();
 
-    // NOTE: This assumes your "ending bankroll" is derived from realized profit.
-    // If you later add a stored bankroll baseline, you can plug it in here.
     const realizedProfitUpToPrevMonthEnd = tickets.reduce((acc, t) => {
       const baseIso = t.placed_at; // ✅ use placed_at only
       if (baseIso >= prevMonthEndIsoExclusive) return acc;
@@ -303,7 +383,11 @@ export default function DashboardPage() {
       return acc;
     }, 0);
 
-    const prevMonthEndingBankroll = round2(realizedProfitUpToPrevMonthEnd);
+    // ✅ Now includes starting bankroll
+    const prevMonthEndingBankroll = round2(
+      (Number(startingBankroll) || 0) + realizedProfitUpToPrevMonthEnd
+    );
+
     const unitSize = computeUnitSize(prevMonthEndingBankroll);
 
     return {
@@ -311,10 +395,26 @@ export default function DashboardPage() {
       prevMonthEndingBankroll,
       unitSize,
     };
-  }, [tickets]);
+  }, [tickets, startingBankroll]);
 
   const chartData = useMemo(() => {
-    // Group by day, sum profits, then compute cumulative
+    const startIso = rangeStart ? toLocalMidnightIso(rangeStart) : null;
+
+    // Baseline = starting bankroll + profit BEFORE the selected range (respecting league filter)
+    const profitBeforeRange = tickets.reduce((acc, t) => {
+      const passLeague =
+        leagueFilter === "ALL" ? true : (t.league ?? "") === leagueFilter;
+      if (!passLeague) return acc;
+
+      if (startIso && t.placed_at < startIso) {
+        if (typeof t.profit === "number" && Number.isFinite(t.profit)) return acc + t.profit;
+      }
+      return acc;
+    }, 0);
+
+    const baseline = round2((Number(startingBankroll) || 0) + profitBeforeRange);
+
+    // Group by day in the filtered range, sum profits, then compute bankroll line
     const map = new Map<string, number>();
     for (const t of filteredTickets) {
       const day = ticketDateForGrouping(t);
@@ -324,12 +424,20 @@ export default function DashboardPage() {
     }
 
     const days = Array.from(map.keys()).sort();
-    let cum = 0;
+    let running = baseline;
+
+    // If no days, return empty so chart renders blank (fine)
     return days.map((d) => {
-      cum += map.get(d) ?? 0;
-      return { date: d, cumulativeProfit: round2(cum) };
+      running += map.get(d) ?? 0;
+      const bankroll = round2(running);
+      const cumulativeProfit = round2(bankroll - (Number(startingBankroll) || 0));
+      return {
+        date: d,
+        bankroll,
+        cumulativeProfit, // kept for tooltip reference if you want it
+      };
     });
-  }, [filteredTickets]);
+  }, [filteredTickets, tickets, startingBankroll, leagueFilter, rangeStart]);
 
   if (!authChecked) return <div style={{ padding: 24 }}>Checking session…</div>;
   if (loading) return <div style={{ padding: 24 }}>Loading…</div>;
@@ -433,11 +541,63 @@ export default function DashboardPage() {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(5, minmax(0, 1fr))",
+          gridTemplateColumns: "repeat(6, minmax(0, 1fr))",
           gap: 12,
           marginTop: 16,
         }}
       >
+        {/* ✅ Starting bankroll (editable) */}
+        <div style={{ border: "1px solid #eee", borderRadius: 10, padding: 12 }}>
+          <div style={{ fontSize: 12, opacity: 0.7 }}>Starting Bankroll</div>
+
+          {profileLoading ? (
+            <div style={{ marginTop: 8, opacity: 0.7 }}>Loading…</div>
+          ) : (
+            <>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
+                <input
+                  type="number"
+                  value={startingBankroll}
+                  onChange={(e) => setStartingBankroll(Number(e.target.value))}
+                  style={{
+                    width: "100%",
+                    padding: "8px 10px",
+                    borderRadius: 8,
+                    border: "1px solid #ddd",
+                  }}
+                />
+              </div>
+
+              <button
+                onClick={saveStartingBankroll}
+                disabled={profileSaving}
+                style={{
+                  marginTop: 8,
+                  padding: "6px 10px",
+                  border: "1px solid #ddd",
+                  borderRadius: 8,
+                  background: "white",
+                  cursor: profileSaving ? "default" : "pointer",
+                  width: "100%",
+                }}
+              >
+                {profileSaving ? "Saving…" : "Save"}
+              </button>
+            </>
+          )}
+        </div>
+
+        {/* ✅ Current bankroll (all-time) */}
+        <div style={{ border: "1px solid #eee", borderRadius: 10, padding: 12 }}>
+          <div style={{ fontSize: 12, opacity: 0.7 }}>Current Bankroll</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: profitColor(currentBankroll - startingBankroll) }}>
+            {fmtMoney(currentBankroll)}
+          </div>
+          <div style={{ marginTop: 6, fontSize: 12, opacity: 0.7, lineHeight: 1.4 }}>
+            Starting + all-time profit
+          </div>
+        </div>
+
         <div style={{ border: "1px solid #eee", borderRadius: 10, padding: 12 }}>
           <div style={{ fontSize: 12, opacity: 0.7 }}>Total Profit</div>
           <div
@@ -471,12 +631,7 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        <div style={{ border: "1px solid #eee", borderRadius: 10, padding: 12 }}>
-          <div style={{ fontSize: 12, opacity: 0.7 }}>Record (W-L-P)</div>
-          <div style={{ fontSize: 22, fontWeight: 800 }}>{summary.record}</div>
-        </div>
-
-        {/* ✅ Unit size card (with clarified logic text) */}
+        {/* ✅ Unit size card (now based on ending bankroll INCLUDING starting bankroll) */}
         <div style={{ border: "1px solid #eee", borderRadius: 10, padding: 12 }}>
           <div style={{ fontSize: 12, opacity: 0.7 }}>Unit Size</div>
 
@@ -504,7 +659,7 @@ export default function DashboardPage() {
           padding: 12,
         }}
       >
-        <div style={{ fontWeight: 700, marginBottom: 8 }}>Cumulative Profit</div>
+        <div style={{ fontWeight: 700, marginBottom: 8 }}>Bankroll</div>
         <div style={{ height: 260 }}>
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={chartData}>
@@ -512,12 +667,7 @@ export default function DashboardPage() {
               <XAxis dataKey="date" tick={{ fontSize: 12 }} />
               <YAxis tick={{ fontSize: 12 }} />
               <Tooltip />
-              <Line
-                type="monotone"
-                dataKey="cumulativeProfit"
-                strokeWidth={2}
-                dot={false}
-              />
+              <Line type="monotone" dataKey="bankroll" strokeWidth={2} dot={false} />
             </LineChart>
           </ResponsiveContainer>
         </div>
