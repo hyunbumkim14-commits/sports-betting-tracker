@@ -275,9 +275,27 @@ export default function TicketPage() {
   async function saveTicketEdits() {
     if (!ticket) return;
 
-    if (!placedDate) return alert("Please select a date.");
-    const stake = Number(betInput);
-    if (!Number.isFinite(stake) || stake <= 0) return alert("Please enter a valid bet amount.");
+   if (!placedDate) return alert("Please select a date.");
+
+    // ✅ Compute stake at save-time to avoid stale state when using To Win
+    if (!multiplierValid) return alert("Odds/multiplier are invalid. Please check your odds.");
+
+    let stake = 0;
+
+    if (betMode === "risk") {
+      stake = Number(betInput);
+      if (!Number.isFinite(stake) || stake <= 0) return alert("Please enter a valid Stake (Risk).");
+    } else {
+      const desiredProfit = Number(toWinInput);
+      if (!Number.isFinite(desiredProfit) || desiredProfit < 0) return alert("Please enter a valid To Win amount.");
+      const denom = multiplier - 1;
+      if (denom <= 0) return alert("Invalid multiplier. Check your odds.");
+      stake = round2(desiredProfit / denom);
+      if (!Number.isFinite(stake) || stake <= 0) return alert("Computed stake is invalid. Check your inputs.");
+    }
+
+    // Keep the input field in sync so the UI matches what is saved
+    setBetInput(String(stake));
 
     const placedAtIso = new Date(placedDate + "T00:00:00").toISOString();
     const leagueToStore = league.trim() === "" ? null : league.trim();
