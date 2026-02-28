@@ -322,8 +322,7 @@ export default function TicketPage() {
     }
 
     setPayoutEdited(false);
-    router.refresh();
-    alert("Saved.");
+    router.push("/?tab=OPEN");
   }
 
   async function saveLegStatus(legId: string, nextStatus: Leg["status"]) {

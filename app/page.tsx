@@ -7,7 +7,7 @@
 
 import Link from "next/link";
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "../lib/supabase";
 import {
   LineChart,
@@ -378,6 +378,7 @@ function TicketList({
 
 export default function DashboardPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   const [authChecked, setAuthChecked] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -401,7 +402,18 @@ export default function DashboardPage() {
   const [graphMode, setGraphMode] = useState<GraphMode>("PROFIT");
 
   // ✅ only bottom tabs (no top tab row)
-  const [tab, setTab] = useState<DashboardTab>("OVERVIEW");
+  const [tab, setTab] = useState<DashboardTab>(() => {
+    const qp = (typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("tab") : null) as
+      | DashboardTab
+      | null;
+    return qp === "OPEN" || qp === "CALENDAR" || qp === "PERSONAL" || qp === "OVERVIEW" ? qp : "OVERVIEW";
+  });
+  useEffect(() => {
+    const qp = (searchParams.get("tab") as DashboardTab | null) ?? null;
+    if (qp && (qp === "OPEN" || qp === "CALENDAR" || qp === "PERSONAL" || qp === "OVERVIEW")) {
+      setTab(qp);
+    }
+  }, [searchParams]);
   const [quickUpdatingId, setQuickUpdatingId] = useState<string | null>(null);
 
   // Calendar tab state
@@ -727,14 +739,23 @@ export default function DashboardPage() {
   }, [tickets, calendarMonthStart]);
 
   const dayTotals = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const t of ticketsInCalendarMonth) {
-      const day = localDateKeyFromIso(t.placed_at);
-      const p = typeof t.profit === "number" && Number.isFinite(t.profit) ? t.profit : 0;
-      map.set(day, (map.get(day) ?? 0) + p);
-    }
-    return map;
-  }, [ticketsInCalendarMonth]);
+  const map = new Map<string, number>();
+  for (const t of ticketsInCalendarMonth) {
+    const day = localDateKeyFromIso(t.placed_at);
+    const p = typeof t.profit === "number" && Number.isFinite(t.profit) ? t.profit : 0;
+    map.set(day, (map.get(day) ?? 0) + p);
+  }
+  return map;
+}, [ticketsInCalendarMonth]);
+
+const monthTotal = useMemo(() => {
+  let total = 0;
+  for (const t of ticketsInCalendarMonth) {
+    const p = typeof t.profit === "number" && Number.isFinite(t.profit) ? t.profit : 0;
+    total += p;
+  }
+  return Math.round(total);
+}, [ticketsInCalendarMonth]);;
 
   const ticketsForSelectedDay = useMemo(() => {
     if (!selectedDay) return [];
@@ -1093,7 +1114,14 @@ export default function DashboardPage() {
               →
             </button>
           </div>
-
+          <Card title="Month total" subtitle={monthLabel(calendarMonthStart)}>
+            <div
+              className="text-2xl font-black tabular-nums"
+              style={{ color: profitColor(monthTotal) }}
+            >
+              {monthTotal === 0 ? "—" : `$${fmtMoney0(monthTotal)}`}
+            </div>
+          </Card>
           <div className="grid grid-cols-7 gap-2 rounded-2xl border border-zinc-200 bg-white p-3">
             {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
               <div key={d} className="text-center text-[11px] font-extrabold text-zinc-500">
@@ -1133,7 +1161,7 @@ export default function DashboardPage() {
 
                     {/* ✅ show FULL number (no ellipsis). smaller font, allow wrap */}
                     <div
-                      className="whitespace-normal break-words text-[10px] font-black leading-tight tabular-nums"
+                      className="whitespace-nowrap text-[10px] font-black leading-none tabular-nums"
                       style={{ color: fg }}
                       title={totalRounded === 0 ? "" : `$${fmtMoney0(totalRounded)}`}
                     >

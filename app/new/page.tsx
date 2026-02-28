@@ -326,8 +326,29 @@ export default function NewTicketPage() {
     )
       return alert("Invalid odds detected.");
 
-    const stakeNum = Number(betInput);
-    if (!Number.isFinite(stakeNum) || stakeNum <= 0) return alert("Please enter a valid bet amount.");
+    let stakeNum = 0;
+
+    if (!multiplierValid) {
+      return alert("Odds/multiplier are invalid. Please check your odds.");
+    }
+
+    if (betMode === "risk") {
+      stakeNum = Number(betInput);
+      if (!Number.isFinite(stakeNum) || stakeNum <= 0) {
+        return alert("Please enter a valid Stake (Risk).");
+      }
+    } else {
+      const desiredProfit = Number(toWinInput);
+      if (!Number.isFinite(desiredProfit) || desiredProfit < 0) {
+        return alert("Please enter a valid To Win (Profit).");
+      }
+      const denom = multiplier - 1;
+      if (denom <= 0) return alert("Invalid multiplier. Check your odds.");
+      stakeNum = round2(desiredProfit / denom);
+      if (!Number.isFinite(stakeNum) || stakeNum <= 0) {
+        return alert("Computed stake is invalid. Check your inputs.");
+      }
+    }
 
     const placedAtIso = new Date(placedDate + "T00:00:00").toISOString();
     const statusToStore: TicketStatus =
