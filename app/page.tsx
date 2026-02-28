@@ -7,7 +7,7 @@
 
 import Link from "next/link";
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { supabase } from "../lib/supabase";
 import {
   LineChart,
@@ -378,7 +378,7 @@ function TicketList({
 
 export default function DashboardPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
+
 
   const [authChecked, setAuthChecked] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -409,11 +409,15 @@ export default function DashboardPage() {
     return qp === "OPEN" || qp === "CALENDAR" || qp === "PERSONAL" || qp === "OVERVIEW" ? qp : "OVERVIEW";
   });
   useEffect(() => {
-    const qp = (searchParams.get("tab") as DashboardTab | null) ?? null;
-    if (qp && (qp === "OPEN" || qp === "CALENDAR" || qp === "PERSONAL" || qp === "OVERVIEW")) {
-      setTab(qp);
-    }
-  }, [searchParams]);
+  // Read ?tab=... on initial load (and when the URL changes via navigation)
+  const qp = (typeof window !== "undefined"
+    ? (new URLSearchParams(window.location.search).get("tab") as DashboardTab | null)
+    : null);
+
+  if (qp && (qp === "OPEN" || qp === "CALENDAR" || qp === "PERSONAL" || qp === "OVERVIEW")) {
+    setTab(qp);
+  }
+}, []);
   const [quickUpdatingId, setQuickUpdatingId] = useState<string | null>(null);
 
   // Calendar tab state
