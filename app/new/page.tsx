@@ -374,6 +374,7 @@ export default function NewTicketPage() {
         user_id: user.id,
         ticket_type: ticketType,
         stake: stakeNum,
+        bet_mode: betMode,
         book: book.trim() === "" ? null : book.trim(),
         league: leagueToStore,
         status: statusToStore,

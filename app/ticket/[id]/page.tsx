@@ -11,6 +11,7 @@ type Ticket = {
   settled_at: string | null;
   ticket_type: "single" | "parlay";
   stake: number;
+  bet_mode: "risk" | "towin" | null;
   status: "open" | "won" | "lost" | "push" | "void" | "partial";
   book: string | null;
   payout: number | null;
@@ -118,7 +119,7 @@ export default function TicketPage() {
 
       const { data: t, error: tErr } = await supabase
         .from("tickets")
-        .select("id, placed_at, settled_at, ticket_type, stake, status, book, payout, profit, notes, league")
+        .select("id, placed_at, settled_at, ticket_type, stake, bet_mode, status, book, payout, profit, notes, league")
         .eq("id", id)
         .single();
 
@@ -149,6 +150,24 @@ export default function TicketPage() {
       setBook(ticketRow.book ?? "");
       setLeague(ticketRow.league ?? "");
       setBetInput(String(ticketRow.stake ?? 0));
+        const mode = (ticketRow.bet_mode === "towin" || ticketRow.bet_mode === "risk")
+          ? ticketRow.bet_mode
+          : "risk";
+
+        setBetMode(mode);
+
+        // Ensure the other field matches the saved stake + odds
+        setTimeout(() => {
+          if (mode === "risk") setToWinFromRisk(String(ticketRow.stake ?? 0));
+          else setRiskFromToWin(toWinInput === "" ? "0" : toWinInput); // we'll override next line
+        }, 0);
+
+        // If mode is towin, we want To Win to be the “primary” visible value derived from stake
+        if (mode === "towin") {
+          // derive toWin from stake using current multiplier
+          // (if multiplier isn't valid yet, the existing effect will fill it once multiplierValid becomes true)
+          setTimeout(() => setToWinFromRisk(String(ticketRow.stake ?? 0)), 0);
+        }
       setSingleStatus(ticketRow.status);
       setPayoutInput(ticketRow.payout === null ? "" : String(ticketRow.payout));
       setPayoutEdited(false);
@@ -201,6 +220,21 @@ export default function TicketPage() {
       return { multiplier: 1, multiplierValid: false };
     }
   }, [ticket, legs]);
+
+  // ✅ Ensure derived field is filled correctly when opening ticket
+  useEffect(() => {
+    if (!ticket) return;
+    if (!multiplierValid) return;
+
+    // When ticket loads, derive the secondary field from the saved stake
+    if (betMode === "risk") {
+      setToWinFromRisk(betInput);
+    } else {
+      // If To Win mode, derive To Win from the saved stake
+      setToWinFromRisk(betInput);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ticket?.id, multiplierValid]);
 
   function setToWinFromRisk(nextRiskStr: string) {
     setBetInput(nextRiskStr);
@@ -313,6 +347,7 @@ export default function TicketPage() {
         book: book.trim() === "" ? null : book.trim(),
         stake,
         league: leagueToStore,
+        bet_mode: betMode,
         status: statusToStore,
         payout,
         profit,
