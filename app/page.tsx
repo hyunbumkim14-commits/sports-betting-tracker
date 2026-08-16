@@ -390,6 +390,8 @@ export default function DashboardPage() {
   const [startingBankroll, setStartingBankroll] = useState<number>(0);
   const [profileLoading, setProfileLoading] = useState(true);
   const [profileSaving, setProfileSaving] = useState(false);
+  const [customUnitSize, setCustomUnitSize] = useState<string>("");
+  const [customUnitSizeSaving, setCustomUnitSizeSaving] = useState(false);
 
   const [leagueFilter, setLeagueFilter] = useState<"ALL" | (typeof LEAGUE_OPTIONS)[number]>("ALL");
 
@@ -467,18 +469,28 @@ export default function DashboardPage() {
 
       const { data, error } = await supabase
         .from("profiles")
-        .select("starting_bankroll")
+        .select("starting_bankroll, custom_unit_size")
         .eq("id", uid)
         .single();
 
       if (!error && data) {
-        if (alive) setStartingBankroll(Number(data.starting_bankroll) || 0);
+        if (alive) {
+          setStartingBankroll(Number(data.starting_bankroll) || 0);
+          setCustomUnitSize(
+            data.custom_unit_size === null || data.custom_unit_size === undefined
+              ? ""
+              : String(data.custom_unit_size)
+          );
+        }
       } else {
         const { error: upsertErr } = await supabase.from("profiles").upsert({
           id: uid,
           starting_bankroll: 0,
         });
-        if (!upsertErr && alive) setStartingBankroll(0);
+        if (!upsertErr && alive) {
+          setStartingBankroll(0);
+          setCustomUnitSize("");
+        }
       }
 
       if (alive) setProfileLoading(false);
@@ -501,6 +513,30 @@ export default function DashboardPage() {
     const safe = Number.isFinite(startingBankroll) ? startingBankroll : 0;
     const { error } = await supabase.from("profiles").upsert({ id: uid, starting_bankroll: safe });
     setProfileSaving(false);
+    if (error) alert(error.message);
+  }
+
+  async function saveCustomUnitSize() {
+    setCustomUnitSizeSaving(true);
+    const { data: auth } = await supabase.auth.getUser();
+    const uid = auth.user?.id;
+    if (!uid) {
+      setCustomUnitSizeSaving(false);
+      return;
+    }
+    const trimmed = customUnitSize.trim();
+    let valueToSave: number | null = null;
+    if (trimmed !== "") {
+      const n = Number(trimmed);
+      if (!Number.isFinite(n) || n < 0) {
+        setCustomUnitSizeSaving(false);
+        alert("Please enter a valid unit size.");
+        return;
+      }
+      valueToSave = n;
+    }
+    const { error } = await supabase.from("profiles").upsert({ id: uid, custom_unit_size: valueToSave });
+    setCustomUnitSizeSaving(false);
     if (error) alert(error.message);
   }
 
@@ -1267,6 +1303,33 @@ const monthTotal = useMemo(() => {
             </div>
             <div className="mt-1 text-xs text-zinc-500">
               Calculation: 5% of the ending bankroll, rounded down to the nearest $50, with a maximum of $10,000.
+            </div>
+          </Card>
+
+          <Card title="Unit size" subtitle="Overrides the suggested unit size used for new bets">
+            {profileLoading ? (
+              <div className="text-sm font-bold text-zinc-500">Loading…</div>
+            ) : (
+              <div className="grid grid-cols-[1fr_auto] gap-2">
+                <input
+                  type="number"
+                  value={customUnitSize}
+                  onChange={(e) => setCustomUnitSize(e.target.value)}
+                  placeholder={`Suggested: ${fmtMoney(unitCard.unitSize)}`}
+                  className="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-base font-bold"
+                />
+                <button
+                  type="button"
+                  onClick={saveCustomUnitSize}
+                  className="inline-flex h-11 items-center justify-center rounded-xl bg-black px-4 text-sm font-extrabold text-white disabled:opacity-60"
+                  disabled={customUnitSizeSaving}
+                >
+                  {customUnitSizeSaving ? "Saving…" : "Save"}
+                </button>
+              </div>
+            )}
+            <div className="mt-1 text-xs text-zinc-500">
+              Leave blank to automatically use the suggested unit size above.
             </div>
           </Card>
 

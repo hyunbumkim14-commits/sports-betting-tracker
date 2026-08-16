@@ -201,11 +201,15 @@ export default function NewTicketPage() {
 
       const { data: prof } = await supabase
         .from("profiles")
-        .select("starting_bankroll")
+        .select("starting_bankroll, custom_unit_size")
         .eq("id", uid)
         .single();
 
       const startingBankroll = Number(prof?.starting_bankroll) || 0;
+      const customUnitSize =
+        prof?.custom_unit_size === null || prof?.custom_unit_size === undefined
+          ? null
+          : Number(prof.custom_unit_size);
 
       const now = new Date();
       const prevMonthEnd = lastDayOfPreviousMonth(now);
@@ -232,7 +236,10 @@ export default function NewTicketPage() {
       }, 0);
 
       const prevMonthEndingBankroll = round2(startingBankroll + realizedProfit);
-      const u = computeUnitSize(prevMonthEndingBankroll);
+      const u =
+        customUnitSize !== null && Number.isFinite(customUnitSize)
+          ? customUnitSize
+          : computeUnitSize(prevMonthEndingBankroll);
 
       if (!alive) return;
 
