@@ -31,6 +31,10 @@ type Leg = {
   notes: string | null;
 };
 
+// oddsText is a free-typing view of american_odds kept in sync only on valid parses,
+// so calculations always read a valid number even mid-edit.
+type LegState = Leg & { oddsText: string };
+
 const LEAGUE_OPTIONS = [
   "NBA",
   "NHL",
@@ -61,6 +65,33 @@ function round2(n: number) {
   return Math.round(n * 100) / 100;
 }
 
+function computeMultiplier(
+  ticketType: Ticket["ticket_type"],
+  legs: Leg[]
+): { multiplier: number; multiplierValid: boolean } {
+  try {
+    if (ticketType === "single") {
+      if (legs.length !== 1) return { multiplier: 1, multiplierValid: false };
+      const a = legs[0].american_odds;
+      if (!Number.isFinite(a) || a === 0) return { multiplier: 1, multiplierValid: false };
+      return { multiplier: americanToDecimal(a), multiplierValid: true };
+    }
+
+    if (legs.length < 2) return { multiplier: 1, multiplierValid: false };
+
+    let m = 1;
+    for (const l of legs) {
+      if (l.status === "push" || l.status === "void") continue;
+      const a = l.american_odds;
+      if (!Number.isFinite(a) || a === 0) return { multiplier: 1, multiplierValid: false };
+      m *= americanToDecimal(a);
+    }
+    return { multiplier: m, multiplierValid: m > 1 };
+  } catch {
+    return { multiplier: 1, multiplierValid: false };
+  }
+}
+
 function profitColor(n: number) {
   if (n > 0) return "#0f7a2a";
   if (n < 0) return "#b00020";
@@ -86,7 +117,7 @@ export default function TicketPage() {
 
   const [loading, setLoading] = useState(true);
   const [ticket, setTicket] = useState<Ticket | null>(null);
-  const [legs, setLegs] = useState<Leg[]>([]);
+  const [legs, setLegs] = useState<LegState[]>([]);
 
   const [placedDate, setPlacedDate] = useState("");
   const [book, setBook] = useState("");
@@ -144,30 +175,30 @@ export default function TicketPage() {
       }
 
       const ticketRow = t as Ticket;
+      const legRows = (l ?? []) as Leg[];
+
       setTicket(ticketRow);
-      setLegs((l ?? []) as Leg[]);
+      setLegs(legRows.map((leg) => ({ ...leg, oddsText: String(leg.american_odds) })));
       setPlacedDate(isoToYyyyMmDd(ticketRow.placed_at));
       setBook(ticketRow.book ?? "");
       setLeague(ticketRow.league ?? "");
-      setBetInput(String(ticketRow.stake ?? 0));
-        const mode = (ticketRow.bet_mode === "towin" || ticketRow.bet_mode === "risk")
-          ? ticketRow.bet_mode
-          : "risk";
 
-        setBetMode(mode);
+      const mode = (ticketRow.bet_mode === "towin" || ticketRow.bet_mode === "risk")
+        ? ticketRow.bet_mode
+        : "risk";
+      setBetMode(mode);
 
-        // Ensure the other field matches the saved stake + odds
-        setTimeout(() => {
-          if (mode === "risk") setToWinFromRisk(String(ticketRow.stake ?? 0));
-          else setRiskFromToWin(toWinInput === "" ? "0" : toWinInput); // we'll override next line
-        }, 0);
+      // The DB "stake" column always holds the risk amount regardless of bet_mode,
+      // so derive To Win directly from the freshly-fetched legs/odds right here —
+      // no need to wait for state/effects to catch up.
+      const stake = Number(ticketRow.stake) || 0;
+      const { multiplier: mult, multiplierValid: multValid } = computeMultiplier(
+        ticketRow.ticket_type,
+        legRows
+      );
+      setBetInput(String(stake));
+      setToWinInput(multValid ? String(round2(stake * (mult - 1))) : "");
 
-        // If mode is towin, we want To Win to be the “primary” visible value derived from stake
-        if (mode === "towin") {
-          // derive toWin from stake using current multiplier
-          // (if multiplier isn't valid yet, the existing effect will fill it once multiplierValid becomes true)
-          setTimeout(() => setToWinFromRisk(String(ticketRow.stake ?? 0)), 0);
-        }
       setSingleStatus(ticketRow.status);
       setPayoutInput(ticketRow.payout === null ? "" : String(ticketRow.payout));
       setPayoutEdited(false);
@@ -196,45 +227,9 @@ export default function TicketPage() {
   }, [ticket, singleStatus]);
 
   const { multiplier, multiplierValid } = useMemo(() => {
-    try {
-      if (!ticket) return { multiplier: 1, multiplierValid: false };
-
-      if (ticket.ticket_type === "single") {
-        if (legs.length !== 1) return { multiplier: 1, multiplierValid: false };
-        const a = legs[0].american_odds;
-        if (!Number.isFinite(a) || a === 0) return { multiplier: 1, multiplierValid: false };
-        return { multiplier: americanToDecimal(a), multiplierValid: true };
-      }
-
-      if (legs.length < 2) return { multiplier: 1, multiplierValid: false };
-
-      let m = 1;
-      for (const l of legs) {
-        if (l.status === "push" || l.status === "void") continue;
-        const a = l.american_odds;
-        if (!Number.isFinite(a) || a === 0) return { multiplier: 1, multiplierValid: false };
-        m *= americanToDecimal(a);
-      }
-      return { multiplier: m, multiplierValid: m > 1 };
-    } catch {
-      return { multiplier: 1, multiplierValid: false };
-    }
+    if (!ticket) return { multiplier: 1, multiplierValid: false };
+    return computeMultiplier(ticket.ticket_type, legs);
   }, [ticket, legs]);
-
-  // ✅ Ensure derived field is filled correctly when opening ticket
-  useEffect(() => {
-    if (!ticket) return;
-    if (!multiplierValid) return;
-
-    // When ticket loads, derive the secondary field from the saved stake
-    if (betMode === "risk") {
-      setToWinFromRisk(betInput);
-    } else {
-      // If To Win mode, derive To Win from the saved stake
-      setToWinFromRisk(betInput);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ticket?.id, multiplierValid]);
 
   function setToWinFromRisk(nextRiskStr: string) {
     setBetInput(nextRiskStr);
@@ -361,17 +356,21 @@ export default function TicketPage() {
       return;
     }
 
-    if (ticket.ticket_type === "single") {
-      const mapped = mapTicketStatusToLegStatus(statusToStore);
-      const firstLegId = legs[0]?.id;
-      if (firstLegId) {
-        const { error: legErr } = await supabase.from("legs").update({ status: mapped }).eq("id", firstLegId);
-        if (legErr) {
-          console.error(legErr);
-          alert("Saved ticket, but failed to sync single leg status.");
-          return;
-        }
-      }
+    const legResults = await Promise.all(
+      legs.map((leg) => {
+        const status =
+          ticket.ticket_type === "single" ? mapTicketStatusToLegStatus(statusToStore) : leg.status;
+        return supabase
+          .from("legs")
+          .update({ selection: leg.selection.trim(), american_odds: leg.american_odds, status })
+          .eq("id", leg.id);
+      })
+    );
+    const legError = legResults.find((r) => r.error)?.error;
+    if (legError) {
+      console.error(legError);
+      alert("Saved ticket, but failed to save leg changes.");
+      return;
     }
 
     setPayoutEdited(false);
@@ -386,6 +385,21 @@ export default function TicketPage() {
       return;
     }
     setLegs((prev) => prev.map((l) => (l.id === legId ? { ...l, status: nextStatus } : l)));
+  }
+
+  function updateLegSelection(legId: string, value: string) {
+    setLegs((prev) => prev.map((l) => (l.id === legId ? { ...l, selection: value } : l)));
+  }
+
+  function updateLegOdds(legId: string, value: string) {
+    setLegs((prev) =>
+      prev.map((l) => {
+        if (l.id !== legId) return l;
+        const n = Number(value);
+        const valid = value.trim() !== "" && Number.isFinite(n) && n !== 0;
+        return { ...l, oddsText: value, american_odds: valid ? n : l.american_odds };
+      })
+    );
   }
 
   async function deleteTicket() {
@@ -621,14 +635,23 @@ export default function TicketPage() {
           <div className="space-y-2">
             {legs.map((leg) => (
               <div key={leg.id} className="rounded-xl border border-zinc-200 bg-white p-2">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold text-zinc-900">
-                      {leg.selection}
-                    </div>
-                    <div className="mt-0.5 text-[11px] text-zinc-600">
-                      Odds: {leg.american_odds > 0 ? `+${leg.american_odds}` : leg.american_odds}
-                    </div>
+                <div className="flex items-start gap-2">
+                  <div className="min-w-0 flex-1">
+                    <FieldLabel>Selection</FieldLabel>
+                    <input
+                      value={leg.selection}
+                      onChange={(e) => updateLegSelection(leg.id, e.target.value)}
+                      className={inputClass}
+                    />
+                  </div>
+
+                  <div className="w-24">
+                    <FieldLabel>Odds</FieldLabel>
+                    <input
+                      value={leg.oddsText}
+                      onChange={(e) => updateLegOdds(leg.id, e.target.value)}
+                      className={inputClass}
+                    />
                   </div>
 
                   <div className="w-36">
@@ -661,6 +684,10 @@ export default function TicketPage() {
                 </div>
               </div>
             ))}
+          </div>
+
+          <div className="mt-2 text-[11px] text-zinc-500">
+            Selection and odds save when you tap Save below. Leg status saves immediately.
           </div>
         </div>
 
