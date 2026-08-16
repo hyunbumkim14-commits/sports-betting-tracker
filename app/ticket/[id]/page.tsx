@@ -115,6 +115,14 @@ export default function TicketPage() {
   const router = useRouter();
   const id = params?.id as string;
 
+  // Where to return to on Cancel/Save/Delete — passed by the dashboard so we
+  // land back on the exact tab (and calendar day) the user came from.
+  const [backHref] = useState<string>(() => {
+    if (typeof window === "undefined") return "/";
+    const from = new URLSearchParams(window.location.search).get("from");
+    return from && from.startsWith("/") && !from.startsWith("//") ? from : "/";
+  });
+
   const [loading, setLoading] = useState(true);
   const [ticket, setTicket] = useState<Ticket | null>(null);
   const [legs, setLegs] = useState<LegState[]>([]);
@@ -157,7 +165,7 @@ export default function TicketPage() {
       if (tErr) {
         console.error(tErr);
         alert("Ticket not found.");
-        router.push("/");
+        router.push(backHref);
         return;
       }
 
@@ -170,7 +178,7 @@ export default function TicketPage() {
       if (lErr) {
         console.error(lErr);
         alert("Error loading legs.");
-        router.push("/");
+        router.push(backHref);
         return;
       }
 
@@ -207,7 +215,7 @@ export default function TicketPage() {
     }
 
     if (id) load();
-  }, [id, router]);
+  }, [id, router, backHref]);
 
   const derivedParlayStatus = useMemo(() => {
     if (!ticket || ticket.ticket_type !== "parlay") return null;
@@ -374,7 +382,7 @@ export default function TicketPage() {
     }
 
     setPayoutEdited(false);
-    router.push("/?tab=OPEN");
+    router.push(backHref);
   }
 
   async function saveLegStatus(legId: string, nextStatus: Leg["status"]) {
@@ -420,7 +428,7 @@ export default function TicketPage() {
       return;
     }
 
-    router.push("/");
+    router.push(backHref);
     router.refresh();
   }
 
@@ -440,7 +448,7 @@ export default function TicketPage() {
             <div className="mt-1 text-[11px] text-zinc-600">ID: {ticket.id}</div>
           </div>
 
-          <Link href="/" className="text-sm font-semibold text-zinc-700 hover:underline">
+          <Link href={backHref} className="text-sm font-semibold text-zinc-700 hover:underline">
             Home
           </Link>
         </div>
@@ -704,7 +712,7 @@ export default function TicketPage() {
             </button>
 
             <div className="flex items-center gap-2">
-              <button type="button" onClick={() => router.push("/")} className={smallBtn}>
+              <button type="button" onClick={() => router.push(backHref)} className={smallBtn}>
                 Cancel
               </button>
               <button type="button" onClick={saveTicketEdits} className={primaryBtn}>

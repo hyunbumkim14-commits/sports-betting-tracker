@@ -158,6 +158,13 @@ function ticketDateForGrouping(t: Ticket) {
   return localDateKeyFromIso(t.placed_at);
 }
 
+function buildDashboardUrl(tab: DashboardTab, selectedDay: string | null) {
+  const params = new URLSearchParams();
+  params.set("tab", tab);
+  if (tab === "CALENDAR" && selectedDay) params.set("day", selectedDay);
+  return `/?${params.toString()}`;
+}
+
 // Accurate-ish Y/M/D diff
 function diffYMD(from: Date, to: Date) {
   let start = new Date(from.getFullYear(), from.getMonth(), from.getDate());
@@ -255,11 +262,13 @@ function TicketCardInner({
   legs,
   quickUpdatingId,
   onQuickSettle,
+  returnTo,
 }: {
   t: Ticket;
   legs: Leg[];
   quickUpdatingId: string | null;
   onQuickSettle?: (t: Ticket, status: Ticket["status"]) => void;
+  returnTo: string;
 }) {
   return (
     <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
@@ -273,7 +282,10 @@ function TicketCardInner({
             <span className="font-bold">{t.book ?? "—"}</span>
           </div>
         </div>
-        <Link href={`/ticket/${t.id}`} className="shrink-0 text-xs font-extrabold text-zinc-900">
+        <Link
+          href={`/ticket/${t.id}?from=${encodeURIComponent(returnTo)}`}
+          className="shrink-0 text-xs font-extrabold text-zinc-900"
+        >
           View →
         </Link>
       </div>
@@ -350,11 +362,13 @@ function TicketList({
   legsByTicket,
   quickUpdatingId,
   onQuickSettle,
+  returnTo,
 }: {
   tickets: Ticket[];
   legsByTicket: Record<string, Leg[]>;
   quickUpdatingId: string | null;
   onQuickSettle?: (t: Ticket, status: Ticket["status"]) => void;
+  returnTo: string;
 }) {
   return (
     <div className="space-y-3">
@@ -370,6 +384,7 @@ function TicketList({
           legs={legsByTicket[t.id] ?? []}
           quickUpdatingId={quickUpdatingId}
           onQuickSettle={onQuickSettle}
+          returnTo={returnTo}
         />
       ))}
     </div>
@@ -423,9 +438,30 @@ export default function DashboardPage() {
   const [quickUpdatingId, setQuickUpdatingId] = useState<string | null>(null);
 
   // Calendar tab state
-  const [calendarMonth, setCalendarMonth] = useState<Date>(() => startOfMonth(new Date()));
-  const [selectedDay, setSelectedDay] = useState<string | null>(null);
+  const [selectedDay, setSelectedDay] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    return new URLSearchParams(window.location.search).get("day");
+  });
+  const [calendarMonth, setCalendarMonth] = useState<Date>(() => {
+    if (typeof window !== "undefined") {
+      const day = new URLSearchParams(window.location.search).get("day");
+      if (day) {
+        const d = new Date(day + "T00:00:00");
+        if (!isNaN(d.getTime())) return startOfMonth(d);
+      }
+    }
+    return startOfMonth(new Date());
+  });
   const monthPickerRef = useRef<HTMLInputElement | null>(null);
+
+  // Keep the URL in sync with the current tab/day so a refresh (or an
+  // exit from a ticket via router.back-style navigation) lands back here.
+  useEffect(() => {
+    router.replace(buildDashboardUrl(tab, selectedDay), { scroll: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, selectedDay]);
+
+  const returnTo = useMemo(() => buildDashboardUrl(tab, selectedDay), [tab, selectedDay]);
 
   useEffect(() => {
     let alive = true;
@@ -1093,6 +1129,7 @@ const monthTotal = useMemo(() => {
             legsByTicket={legsByTicket}
             quickUpdatingId={quickUpdatingId}
             onQuickSettle={quickSettle}
+            returnTo={returnTo}
           />
         </div>
       ) : null}
@@ -1233,7 +1270,11 @@ const monthTotal = useMemo(() => {
                 ) : null}
 
                 {ticketsForSelectedDay.map((t) => (
-                  <Link key={t.id} href={`/ticket/${t.id}`} className="block">
+                  <Link
+                    key={t.id}
+                    href={`/ticket/${t.id}?from=${encodeURIComponent(returnTo)}`}
+                    className="block"
+                  >
                     <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
