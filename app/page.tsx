@@ -518,7 +518,8 @@ export default function DashboardPage() {
               : String(data.custom_unit_size)
           );
         }
-      } else {
+      } else if (error && error.code === "PGRST116") {
+        // No profile row exists yet for this user — create one with defaults.
         const { error: upsertErr } = await supabase.from("profiles").upsert({
           id: uid,
           starting_bankroll: 0,
@@ -527,6 +528,12 @@ export default function DashboardPage() {
           setStartingBankroll(0);
           setCustomUnitSize("");
         }
+      } else if (error) {
+        // Any other error (e.g. a schema mismatch) must NOT trigger the
+        // default-profile upsert above — that would silently overwrite a
+        // real starting_bankroll value with 0.
+        console.error(error);
+        if (alive) alert(`Failed to load your profile: ${error.message}`);
       }
 
       if (alive) setProfileLoading(false);
