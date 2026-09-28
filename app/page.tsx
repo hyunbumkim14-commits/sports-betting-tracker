@@ -31,6 +31,12 @@ type Ticket = {
   placed_at: string;
   settled_at: string | null;
   league: string | null;
+  bet_source?: "sportsbook" | "kalshi" | null;
+  market_title?: string | null;
+  kalshi_side?: "yes" | "no" | null;
+  kalshi_price_cents?: number | null;
+  kalshi_shares?: number | null;
+  kalshi_fee?: number | null;
 };
 
 type Leg = {
@@ -274,13 +280,29 @@ function TicketCardInner({
     <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="truncate text-sm font-extrabold">
-            {t.league ?? "—"} • {t.ticket_type.toUpperCase()}
-          </div>
-          <div className="mt-1 text-xs text-zinc-600">
-            Date: <span className="font-bold">{ticketDateForGrouping(t)}</span> • Book:{" "}
-            <span className="font-bold">{t.book ?? "—"}</span>
-          </div>
+          {t.bet_source === "kalshi" ? (
+            <>
+              <div className="truncate text-sm font-extrabold">
+                KALSHI • {t.market_title ?? "—"}
+              </div>
+              <div className="mt-1 text-xs text-zinc-600">
+                Date: <span className="font-bold">{ticketDateForGrouping(t)}</span> • Side:{" "}
+                <span className="font-bold">{(t.kalshi_side ?? "—").toUpperCase()}</span> • Price:{" "}
+                <span className="font-bold">{t.kalshi_price_cents ?? "—"}¢</span> • Shares:{" "}
+                <span className="font-bold">{fmtNumber(t.kalshi_shares ?? 0)}</span>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="truncate text-sm font-extrabold">
+                {t.league ?? "—"} • {t.ticket_type.toUpperCase()}
+              </div>
+              <div className="mt-1 text-xs text-zinc-600">
+                Date: <span className="font-bold">{ticketDateForGrouping(t)}</span> • Book:{" "}
+                <span className="font-bold">{t.book ?? "—"}</span>
+              </div>
+            </>
+          )}
         </div>
         <Link
           href={`/ticket/${t.id}?from=${encodeURIComponent(returnTo)}`}
@@ -310,10 +332,16 @@ function TicketCardInner({
         </div>
       </div>
 
-      <TicketLines legs={legs} />
+      {t.bet_source === "kalshi" ? (
+        <div className="mt-2 text-[11px] text-zinc-500">
+          Fee: ${fmtMoney(t.kalshi_fee ?? 0)}
+        </div>
+      ) : (
+        <TicketLines legs={legs} />
+      )}
 
       {t.status === "open" ? (
-        <div className="mt-3 grid grid-cols-4 gap-2">
+        <div className={`mt-3 grid gap-2 ${t.bet_source === "kalshi" ? "grid-cols-3" : "grid-cols-4"}`}>
           <button
             type="button"
             disabled={quickUpdatingId === t.id}
@@ -330,14 +358,16 @@ function TicketCardInner({
           >
             ✖ Loss
           </button>
-          <button
-            type="button"
-            disabled={quickUpdatingId === t.id}
-            onClick={() => onQuickSettle?.(t, "push")}
-            className="h-10 rounded-xl border border-zinc-200 bg-white px-3 text-sm font-extrabold disabled:opacity-60"
-          >
-            Push
-          </button>
+          {t.bet_source !== "kalshi" && (
+            <button
+              type="button"
+              disabled={quickUpdatingId === t.id}
+              onClick={() => onQuickSettle?.(t, "push")}
+              className="h-10 rounded-xl border border-zinc-200 bg-white px-3 text-sm font-extrabold disabled:opacity-60"
+            >
+              Push
+            </button>
+          )}
           <button
             type="button"
             disabled={quickUpdatingId === t.id}
@@ -347,7 +377,11 @@ function TicketCardInner({
             Void
           </button>
           {quickUpdatingId === t.id ? (
-            <div className="col-span-4 mt-1 text-center text-xs font-bold text-zinc-500">
+            <div
+              className={`mt-1 text-center text-xs font-bold text-zinc-500 ${
+                t.bet_source === "kalshi" ? "col-span-3" : "col-span-4"
+              }`}
+            >
               Updating…
             </div>
           ) : null}
@@ -455,10 +489,13 @@ export default function DashboardPage() {
   const monthPickerRef = useRef<HTMLInputElement | null>(null);
 
   // Keep the URL in sync with the current tab/day so a refresh (or an
-  // exit from a ticket via router.back-style navigation) lands back here.
+  // exit from a ticket) lands back here. Uses the native History API
+  // directly (not router.replace) so switching tabs stays instant and
+  // client-only — router.replace triggers a server RSC-payload fetch
+  // on every call, which made tab/day switches feel laggy.
   useEffect(() => {
-    router.replace(buildDashboardUrl(tab, selectedDay), { scroll: false });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (typeof window === "undefined") return;
+    window.history.replaceState(null, "", buildDashboardUrl(tab, selectedDay));
   }, [tab, selectedDay]);
 
   const returnTo = useMemo(() => buildDashboardUrl(tab, selectedDay), [tab, selectedDay]);
@@ -588,7 +625,9 @@ export default function DashboardPage() {
 
     const { data, error } = await supabase
       .from("tickets")
-      .select("id, ticket_type, stake, status, book, payout, profit, placed_at, settled_at, league")
+      .select(
+        "id, ticket_type, stake, status, book, payout, profit, placed_at, settled_at, league, bet_source, market_title, kalshi_side, kalshi_price_cents, kalshi_shares, kalshi_fee"
+      )
       .order("placed_at", { ascending: false });
 
     if (error) {
@@ -652,8 +691,10 @@ export default function DashboardPage() {
       payout = round2(stake);
       profit = 0;
     } else if (status === "won") {
-      // WIN: compute from odds
-      if (t.ticket_type === "single") {
+      if (t.bet_source === "kalshi") {
+        payout = round2(Number(t.kalshi_shares || 0) * 1);
+        profit = round2(payout - stake);
+      } else if (t.ticket_type === "single") {
         const a = legs[0]?.american_odds;
         if (Number.isFinite(a) && a !== 0) {
           const dec = americanToDecimal(a);
@@ -707,9 +748,6 @@ export default function DashboardPage() {
       alert(error.message);
       return;
     }
-
-    // keep data perfectly in sync
-    await loadTicketsAndLegs();
   }
 
   // ---------- Date range (Overview) ----------
@@ -1285,13 +1323,27 @@ const monthTotal = useMemo(() => {
                     <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
-                          <div className="truncate text-sm font-extrabold">
-                            {t.league ?? "—"} • {t.ticket_type.toUpperCase()}
-                          </div>
-                          <div className="mt-1 text-xs text-zinc-600">
-                            Book: <span className="font-bold">{t.book ?? "—"}</span> • Status:{" "}
-                            <span className="font-bold">{t.status.toUpperCase()}</span>
-                          </div>
+                          {t.bet_source === "kalshi" ? (
+                            <>
+                              <div className="truncate text-sm font-extrabold">
+                                KALSHI • {t.market_title ?? "—"}
+                              </div>
+                              <div className="mt-1 text-xs text-zinc-600">
+                                Side: <span className="font-bold">{(t.kalshi_side ?? "—").toUpperCase()}</span> •{" "}
+                                Status: <span className="font-bold">{t.status.toUpperCase()}</span>
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <div className="truncate text-sm font-extrabold">
+                                {t.league ?? "—"} • {t.ticket_type.toUpperCase()}
+                              </div>
+                              <div className="mt-1 text-xs text-zinc-600">
+                                Book: <span className="font-bold">{t.book ?? "—"}</span> • Status:{" "}
+                                <span className="font-bold">{t.status.toUpperCase()}</span>
+                              </div>
+                            </>
+                          )}
                         </div>
                         <div
                           className="shrink-0 text-sm font-black tabular-nums"
@@ -1303,7 +1355,7 @@ const monthTotal = useMemo(() => {
                         </div>
                       </div>
 
-                      <TicketLines legs={legsByTicket[t.id] ?? []} />
+                      {t.bet_source !== "kalshi" && <TicketLines legs={legsByTicket[t.id] ?? []} />}
                     </div>
                   </Link>
                 ))}

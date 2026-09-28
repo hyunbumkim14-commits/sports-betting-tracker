@@ -18,7 +18,15 @@ type Ticket = {
   profit: number | null;
   notes: string | null;
   league: string | null;
+  bet_source?: "sportsbook" | "kalshi" | null;
+  market_title?: string | null;
+  kalshi_side?: "yes" | "no" | null;
+  kalshi_price_cents?: number | null;
+  kalshi_shares?: number | null;
+  kalshi_fee?: number | null;
 };
+
+type KalshiStatus = "open" | "won" | "lost" | "void";
 
 type TicketStatus = Ticket["status"];
 type ParlayStatus = Exclude<TicketStatus, "partial">;
@@ -140,6 +148,14 @@ export default function TicketPage() {
   const [payoutInput, setPayoutInput] = useState("");
   const [payoutEdited, setPayoutEdited] = useState(false);
 
+  // Kalshi-specific edit state
+  const [kalshiMarketTitle, setKalshiMarketTitle] = useState("");
+  const [kalshiSideEdit, setKalshiSideEdit] = useState<"yes" | "no">("yes");
+  const [kalshiPriceCentsInput, setKalshiPriceCentsInput] = useState("");
+  const [kalshiSharesInput, setKalshiSharesInput] = useState("");
+  const [kalshiFeeInput, setKalshiFeeInput] = useState("");
+  const [kalshiStatusEdit, setKalshiStatusEdit] = useState<KalshiStatus>("open");
+
   // ✅ Compact UI tokens
   const inputClass =
     "h-9 w-full rounded-lg border border-zinc-200 bg-white px-2 text-sm outline-none focus:border-zinc-400";
@@ -158,7 +174,9 @@ export default function TicketPage() {
 
       const { data: t, error: tErr } = await supabase
         .from("tickets")
-        .select("id, placed_at, settled_at, ticket_type, stake, bet_mode, status, book, payout, profit, notes, league")
+        .select(
+          "id, placed_at, settled_at, ticket_type, stake, bet_mode, status, book, payout, profit, notes, league, bet_source, market_title, kalshi_side, kalshi_price_cents, kalshi_shares, kalshi_fee"
+        )
         .eq("id", id)
         .single();
 
@@ -211,6 +229,31 @@ export default function TicketPage() {
       setPayoutInput(ticketRow.payout === null ? "" : String(ticketRow.payout));
       setPayoutEdited(false);
 
+      if (ticketRow.bet_source === "kalshi") {
+        setKalshiMarketTitle(ticketRow.market_title ?? "");
+        setKalshiSideEdit(ticketRow.kalshi_side === "no" ? "no" : "yes");
+        setKalshiPriceCentsInput(
+          ticketRow.kalshi_price_cents === null || ticketRow.kalshi_price_cents === undefined
+            ? ""
+            : String(ticketRow.kalshi_price_cents)
+        );
+        setKalshiSharesInput(
+          ticketRow.kalshi_shares === null || ticketRow.kalshi_shares === undefined
+            ? ""
+            : String(ticketRow.kalshi_shares)
+        );
+        setKalshiFeeInput(
+          ticketRow.kalshi_fee === null || ticketRow.kalshi_fee === undefined
+            ? "0"
+            : String(ticketRow.kalshi_fee)
+        );
+        setKalshiStatusEdit(
+          ticketRow.status === "won" || ticketRow.status === "lost" || ticketRow.status === "void"
+            ? ticketRow.status
+            : "open"
+        );
+      }
+
       setLoading(false);
     }
 
@@ -238,6 +281,47 @@ export default function TicketPage() {
     if (!ticket) return { multiplier: 1, multiplierValid: false };
     return computeMultiplier(ticket.ticket_type, legs);
   }, [ticket, legs]);
+
+  // Editing an existing Kalshi position just needs the actual price/shares/fee
+  // that happened — no need to re-solve the buy-side calculator from new/page.tsx.
+  const kalshiEditCalc = useMemo(() => {
+    const priceCents = Number(kalshiPriceCentsInput);
+    const priceValid = Number.isInteger(priceCents) && priceCents >= 1 && priceCents <= 99;
+    const priceDollars = priceValid ? priceCents / 100 : 0;
+
+    const shares = Number(kalshiSharesInput);
+    const sharesValid = Number.isFinite(shares) && shares > 0;
+
+    const fee = Number(kalshiFeeInput);
+    const feeValid = Number.isFinite(fee) && fee >= 0;
+
+    const valid = priceValid && sharesValid && feeValid;
+    const stake = valid ? round2(shares * priceDollars + fee) : 0;
+
+    let payout: number | null = null;
+    let profit: number | null = null;
+
+    if (valid) {
+      if (payoutEdited && payoutInput.trim() !== "") {
+        const p = Number(payoutInput);
+        if (Number.isFinite(p)) {
+          payout = round2(p);
+          profit = round2(payout - stake);
+        }
+      } else if (kalshiStatusEdit === "won") {
+        payout = round2(shares * 1);
+        profit = round2(payout - stake);
+      } else if (kalshiStatusEdit === "lost") {
+        payout = 0;
+        profit = round2(0 - stake);
+      } else if (kalshiStatusEdit === "void") {
+        payout = stake;
+        profit = 0;
+      }
+    }
+
+    return { priceValid, priceDollars, sharesValid, feeValid, valid, shares, fee, stake, payout, profit };
+  }, [kalshiPriceCentsInput, kalshiSharesInput, kalshiFeeInput, kalshiStatusEdit, payoutInput, payoutEdited]);
 
   function setToWinFromRisk(nextRiskStr: string) {
     setBetInput(nextRiskStr);
@@ -308,6 +392,45 @@ export default function TicketPage() {
     const profit = round2(payout - stakeNum);
     return { payout, profit };
   }, [ticket, legs, stakeNum, singleStatus, derivedParlayStatus, payoutInput, payoutEdited]);
+
+  async function saveKalshiEdits() {
+    if (!ticket) return;
+    if (!placedDate) return alert("Please select a date.");
+    if (!kalshiMarketTitle.trim()) return alert("Please enter the market question.");
+    if (!kalshiEditCalc.priceValid) return alert("Price must be a whole number between 1 and 99 cents.");
+    if (!kalshiEditCalc.sharesValid) return alert("Shares must be a positive number.");
+    if (!kalshiEditCalc.feeValid) return alert("Fee must be 0 or greater.");
+
+    const placedAtIso = new Date(placedDate + "T00:00:00").toISOString();
+    const settledAtIso = kalshiStatusEdit === "open" ? null : placedAtIso;
+
+    const { error } = await supabase
+      .from("tickets")
+      .update({
+        placed_at: placedAtIso,
+        market_title: kalshiMarketTitle.trim(),
+        league: league.trim() === "" ? null : league.trim(),
+        kalshi_side: kalshiSideEdit,
+        kalshi_price_cents: Number(kalshiPriceCentsInput),
+        kalshi_shares: kalshiEditCalc.shares,
+        kalshi_fee: kalshiEditCalc.fee,
+        stake: kalshiEditCalc.stake,
+        status: kalshiStatusEdit,
+        payout: kalshiEditCalc.payout,
+        profit: kalshiEditCalc.profit,
+        settled_at: settledAtIso,
+      })
+      .eq("id", ticket.id);
+
+    if (error) {
+      console.error(error);
+      alert(`Failed to save: ${error.message}`);
+      return;
+    }
+
+    setPayoutEdited(false);
+    router.push(backHref);
+  }
 
   async function saveTicketEdits() {
     if (!ticket) return;
@@ -443,7 +566,9 @@ export default function TicketPage() {
           <div>
             <div className="text-xs font-semibold text-zinc-500">Ticket</div>
             <h1 className="text-xl font-bold tracking-tight">
-              {ticket.league ?? "—"} • {ticket.ticket_type.toUpperCase()}
+              {ticket.bet_source === "kalshi"
+                ? `KALSHI • ${ticket.market_title ?? "—"}`
+                : `${ticket.league ?? "—"} • ${ticket.ticket_type.toUpperCase()}`}
             </h1>
             <div className="mt-1 text-[11px] text-zinc-600">ID: {ticket.id}</div>
           </div>
@@ -454,36 +579,162 @@ export default function TicketPage() {
         </div>
 
         {/* Summary */}
-        <div className="mt-4 grid grid-cols-2 gap-2">
-          <div className={cardClass}>
-            <div className="text-[11px] font-semibold text-zinc-600">Computed Profit</div>
-            <div
-              className="mt-1 text-lg font-bold"
-              style={{
-                color:
-                  computedPayoutProfit.profit === null
-                    ? "#111"
-                    : profitColor(computedPayoutProfit.profit),
-              }}
-            >
-              {computedPayoutProfit.profit === null ? "—" : computedPayoutProfit.profit.toFixed(2)}
-            </div>
-          </div>
+        {(() => {
+          const summary =
+            ticket.bet_source === "kalshi"
+              ? { profit: kalshiEditCalc.profit, payout: kalshiEditCalc.payout }
+              : computedPayoutProfit;
+          return (
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <div className={cardClass}>
+                <div className="text-[11px] font-semibold text-zinc-600">Computed Profit</div>
+                <div
+                  className="mt-1 text-lg font-bold"
+                  style={{ color: summary.profit === null ? "#111" : profitColor(summary.profit) }}
+                >
+                  {summary.profit === null ? "—" : summary.profit.toFixed(2)}
+                </div>
+              </div>
 
-          <div className={cardClass}>
-            <div className="text-[11px] font-semibold text-zinc-600">Computed Payout</div>
-            <div className="mt-1 text-lg font-bold text-zinc-900">
-              {computedPayoutProfit.payout === null ? "—" : computedPayoutProfit.payout.toFixed(2)}
+              <div className={cardClass}>
+                <div className="text-[11px] font-semibold text-zinc-600">Computed Payout</div>
+                <div className="mt-1 text-lg font-bold text-zinc-900">
+                  {summary.payout === null ? "—" : summary.payout.toFixed(2)}
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
+          );
+        })()}
 
-        {ticket.ticket_type === "single" && (
+        {ticket.bet_source !== "kalshi" && ticket.ticket_type === "single" && (
           <div className="mt-2 text-[11px] text-zinc-600">
             Single: leg status mirrors ticket status
           </div>
         )}
 
+        {ticket.bet_source === "kalshi" ? (
+        <>
+        {/* Kalshi Market */}
+        <div className={`mt-3 ${cardClass}`}>
+          <div className="mb-2 text-sm font-bold">Market</div>
+
+          <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+            <div className="col-span-2 md:col-span-4">
+              <FieldLabel>Market question</FieldLabel>
+              <input
+                value={kalshiMarketTitle}
+                onChange={(e) => setKalshiMarketTitle(e.target.value)}
+                className={inputClass}
+              />
+            </div>
+
+            <div className="col-span-1 md:col-span-2">
+              <FieldLabel>Category</FieldLabel>
+              <input
+                value={league}
+                onChange={(e) => setLeague(e.target.value)}
+                placeholder="Politics, Econ…"
+                className={inputClass}
+              />
+            </div>
+
+            <div className="col-span-1">
+              <FieldLabel>Date</FieldLabel>
+              <input
+                type="date"
+                value={placedDate}
+                onChange={(e) => setPlacedDate(e.target.value)}
+                className={inputClass}
+              />
+            </div>
+
+            <div className="col-span-1">
+              <FieldLabel>Side</FieldLabel>
+              <div className="flex h-9 items-center gap-3 rounded-lg border border-zinc-200 bg-white px-2 text-xs font-semibold text-zinc-700">
+                <label className="flex items-center gap-1">
+                  <input
+                    type="radio"
+                    checked={kalshiSideEdit === "yes"}
+                    onChange={() => setKalshiSideEdit("yes")}
+                  />
+                  Yes
+                </label>
+                <label className="flex items-center gap-1">
+                  <input
+                    type="radio"
+                    checked={kalshiSideEdit === "no"}
+                    onChange={() => setKalshiSideEdit("no")}
+                  />
+                  No
+                </label>
+              </div>
+            </div>
+
+            <div className="col-span-1">
+              <FieldLabel>Price (¢)</FieldLabel>
+              <input
+                value={kalshiPriceCentsInput}
+                onChange={(e) => setKalshiPriceCentsInput(e.target.value)}
+                className={inputClass}
+              />
+            </div>
+
+            <div className="col-span-1">
+              <FieldLabel>Shares</FieldLabel>
+              <input
+                value={kalshiSharesInput}
+                onChange={(e) => setKalshiSharesInput(e.target.value)}
+                className={inputClass}
+              />
+            </div>
+
+            <div className="col-span-1">
+              <FieldLabel>Fee ($)</FieldLabel>
+              <input
+                value={kalshiFeeInput}
+                onChange={(e) => setKalshiFeeInput(e.target.value)}
+                className={inputClass}
+              />
+            </div>
+
+            <div className="col-span-1">
+              <FieldLabel>Total cost</FieldLabel>
+              <div className="h-9 rounded-lg border border-zinc-200 bg-zinc-50 px-2 text-sm leading-9 text-zinc-700">
+                {kalshiEditCalc.valid ? `$${kalshiEditCalc.stake.toFixed(2)}` : "—"}
+              </div>
+            </div>
+
+            <div className="col-span-1 md:col-span-2">
+              <FieldLabel>Status</FieldLabel>
+              <select
+                value={kalshiStatusEdit}
+                onChange={(e) => setKalshiStatusEdit(e.target.value as KalshiStatus)}
+                className={inputClass}
+              >
+                <option value="open">open</option>
+                <option value="won">won</option>
+                <option value="lost">lost</option>
+                <option value="void">void</option>
+              </select>
+            </div>
+
+            <div className="col-span-1 md:col-span-2">
+              <FieldLabel>Actual payout (optional)</FieldLabel>
+              <input
+                value={payoutInput}
+                onChange={(e) => {
+                  setPayoutInput(e.target.value);
+                  setPayoutEdited(true);
+                }}
+                placeholder="Total return incl. cost"
+                className={inputClass}
+              />
+            </div>
+          </div>
+        </div>
+        </>
+        ) : (
+        <>
         {/* Details */}
         <div className={`mt-3 ${cardClass}`}>
           <div className="mb-2 text-sm font-bold">Details</div>
@@ -698,6 +949,8 @@ export default function TicketPage() {
             Selection and odds save when you tap Save below. Leg status saves immediately.
           </div>
         </div>
+        </>
+        )}
 
         {/* bottom padding so sticky bar doesn't cover content */}
         <div className="h-20" />
@@ -715,7 +968,11 @@ export default function TicketPage() {
               <button type="button" onClick={() => router.push(backHref)} className={smallBtn}>
                 Cancel
               </button>
-              <button type="button" onClick={saveTicketEdits} className={primaryBtn}>
+              <button
+                type="button"
+                onClick={ticket.bet_source === "kalshi" ? saveKalshiEdits : saveTicketEdits}
+                className={primaryBtn}
+              >
                 Save
               </button>
             </div>

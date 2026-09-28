@@ -11,6 +11,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabase";
 
 type TicketStatus = "open" | "won" | "lost" | "push" | "void" | "partial";
+type KalshiStatus = "open" | "won" | "lost" | "void";
 
 type LegDraft = {
   selection: string;
@@ -57,6 +58,100 @@ const LEAGUE_OPTIONS = [
   "OTHER",
 ] as const;
 
+const KALSHI_CATEGORY_OPTIONS = [
+  "POLITICS",
+  "ECONOMICS",
+  "FINANCIALS",
+  "WEATHER",
+  "CLIMATE",
+  "SPORTS",
+  "CRYPTO",
+  "CULTURE",
+  "SCIENCE",
+  "WORLD",
+  "OTHER",
+] as const;
+
+function fmtUsd(n: number) {
+  return new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(
+    Number.isFinite(n) ? n : 0
+  );
+}
+function fmtInt(n: number) {
+  return new Intl.NumberFormat("en-US").format(Number.isFinite(n) ? n : 0);
+}
+
+// Kalshi charges a fee on the whole order, rounded up to the cent — not
+// summed per-contract — so this must be called with the total share count.
+function kalshiFee(shares: number, priceDollars: number, feeRate: number) {
+  if (shares <= 0 || !Number.isFinite(priceDollars) || !Number.isFinite(feeRate)) return 0;
+  const raw = feeRate * shares * priceDollars * (1 - priceDollars);
+  return Math.ceil(raw * 100) / 100;
+}
+
+// Largest share count whose (cost + fee) fits inside `spend`. Uses a closed-form
+// estimate first — at a 1¢ price a $40k spend implies ~4M shares, so decrementing
+// one share at a time from a naive floor(spend/price) guess would be far too slow.
+function solveKalshiQuickShares(spend: number, priceDollars: number, feeRate: number) {
+  if (!Number.isFinite(spend) || spend <= 0 || !Number.isFinite(priceDollars) || priceDollars <= 0) {
+    return 0;
+  }
+  const approxCostPerShare = priceDollars * (1 + feeRate * (1 - priceDollars));
+  let shares = approxCostPerShare > 0 ? Math.floor(spend / approxCostPerShare) : 0;
+  shares = Math.max(0, shares);
+
+  for (let guard = 0; guard < 50; guard++) {
+    const cost = shares * priceDollars + kalshiFee(shares, priceDollars, feeRate);
+    if (cost <= spend) {
+      const nextCost = (shares + 1) * priceDollars + kalshiFee(shares + 1, priceDollars, feeRate);
+      if (nextCost <= spend) {
+        shares += 1;
+        continue;
+      }
+      break;
+    }
+    shares -= 1;
+    if (shares <= 0) {
+      shares = 0;
+      break;
+    }
+  }
+  return Math.max(0, shares);
+}
+
+// Smallest share count whose net profit (payout − cost − fee) reaches `desiredProfit`.
+// Same closed-form-then-correct approach as above, for the same performance reason.
+function solveKalshiLimitShares(desiredProfit: number, priceDollars: number, feeRate: number) {
+  if (
+    !Number.isFinite(desiredProfit) ||
+    desiredProfit <= 0 ||
+    !Number.isFinite(priceDollars) ||
+    priceDollars <= 0 ||
+    priceDollars >= 1
+  ) {
+    return 0;
+  }
+  const perShareNet = 1 - priceDollars;
+  const approxNetPerShare = perShareNet * (1 - feeRate * priceDollars);
+  let shares = approxNetPerShare > 0 ? Math.ceil(desiredProfit / approxNetPerShare) : 0;
+  shares = Math.max(0, shares);
+
+  for (let guard = 0; guard < 50; guard++) {
+    const profit = shares * perShareNet - kalshiFee(shares, priceDollars, feeRate);
+    if (profit >= desiredProfit) {
+      if (shares <= 0) break;
+      const profitFewer = (shares - 1) * perShareNet - kalshiFee(shares - 1, priceDollars, feeRate);
+      if (profitFewer >= desiredProfit) {
+        shares -= 1;
+        continue;
+      }
+      break;
+    }
+    shares += 1;
+  }
+  return Math.max(0, shares);
+}
+
 function mapTicketStatusToLegStatus(s: TicketStatus): LegDraft["status"] {
   if (s === "won") return "won";
   if (s === "lost") return "lost";
@@ -71,6 +166,21 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
 
 export default function NewTicketPage() {
   const router = useRouter();
+
+  // ✅ Kalshi is the default bet source
+  const [betSource, setBetSource] = useState<"kalshi" | "sportsbook">("kalshi");
+
+  // Kalshi state
+  const [marketTitle, setMarketTitle] = useState("");
+  const [kalshiCategory, setKalshiCategory] = useState("");
+  const [kalshiSide, setKalshiSide] = useState<"yes" | "no">("yes");
+  const [kalshiOrderType, setKalshiOrderType] = useState<"quick" | "limit">("quick");
+  const [kalshiPriceCents, setKalshiPriceCents] = useState("50");
+  const [kalshiFeeRatePct, setKalshiFeeRatePct] = useState("7");
+  const [kalshiSpendInput, setKalshiSpendInput] = useState("");
+  const [kalshiWinInput, setKalshiWinInput] = useState("");
+  const [kalshiStatus, setKalshiStatus] = useState<KalshiStatus>("open");
+  const [kalshiActualPayout, setKalshiActualPayout] = useState("");
 
   const [ticketType, setTicketType] = useState<"single" | "parlay">("single");
 
@@ -115,6 +225,52 @@ export default function NewTicketPage() {
     "inline-flex h-9 items-center justify-center rounded-lg bg-black px-4 text-sm font-semibold text-white";
   const dangerBtn =
     "inline-flex h-9 items-center justify-center rounded-lg border border-red-200 bg-white px-3 text-sm font-semibold text-red-700";
+
+  function selectKalshiOrderType(next: "quick" | "limit") {
+    setKalshiOrderType(next);
+    // Quick orders take liquidity (taker fee, ~7% default); resting limit
+    // orders are typically maker (no fee by default). Still fully editable.
+    setKalshiFeeRatePct(next === "quick" ? "7" : "0");
+  }
+
+  const kalshiCalc = useMemo(() => {
+    const priceCents = Number(kalshiPriceCents);
+    const priceValid = Number.isInteger(priceCents) && priceCents >= 1 && priceCents <= 99;
+    const priceDollars = priceValid ? priceCents / 100 : 0;
+
+    const feeRatePct = Number(kalshiFeeRatePct);
+    const feeRateValid = Number.isFinite(feeRatePct) && feeRatePct >= 0;
+    const feeRate = feeRateValid ? feeRatePct / 100 : 0;
+
+    let shares = 0;
+    let inputValid = false;
+
+    if (priceValid && feeRateValid) {
+      if (kalshiOrderType === "quick") {
+        const spend = Number(kalshiSpendInput);
+        inputValid = Number.isFinite(spend) && spend > 0;
+        if (inputValid) shares = solveKalshiQuickShares(spend, priceDollars, feeRate);
+      } else {
+        const desiredProfit = Number(kalshiWinInput);
+        inputValid = Number.isFinite(desiredProfit) && desiredProfit > 0;
+        if (inputValid) shares = solveKalshiLimitShares(desiredProfit, priceDollars, feeRate);
+      }
+    }
+
+    const valid = priceValid && feeRateValid && inputValid && shares > 0;
+    const fee = valid ? kalshiFee(shares, priceDollars, feeRate) : 0;
+    const totalCost = valid ? round2(shares * priceDollars + fee) : 0;
+    const payout = valid ? round2(shares * 1) : 0;
+    const profit = valid ? round2(payout - totalCost) : 0;
+    const spendNum = Number(kalshiSpendInput);
+    const leftover =
+      valid && kalshiOrderType === "quick" && Number.isFinite(spendNum)
+        ? round2(spendNum - totalCost)
+        : 0;
+    const decimalOdds = priceValid ? round2(1 / priceDollars) : null;
+
+    return { priceValid, priceDollars, feeRateValid, valid, shares, fee, totalCost, payout, profit, leftover, decimalOdds };
+  }, [kalshiPriceCents, kalshiFeeRatePct, kalshiOrderType, kalshiSpendInput, kalshiWinInput]);
 
   // ✅ derive decimal multiplier for the ticket (single or parlay)
   const { multiplier, multiplierValid } = useMemo(() => {
@@ -313,6 +469,79 @@ export default function NewTicketPage() {
     return { payout: null, profit: null, settled_at: null };
   }
 
+  async function saveKalshi() {
+    const user = (await supabase.auth.getUser()).data.user;
+    if (!user) {
+      alert("Not logged in.\nGo to /login.");
+      return;
+    }
+
+    if (!placedDate) return alert("Please select a date.");
+    if (!marketTitle.trim()) return alert("Please enter the market question.");
+    if (!kalshiCalc.priceValid) return alert("Price must be a whole number between 1 and 99 cents.");
+    if (!kalshiCalc.feeRateValid) return alert("Fee rate must be 0 or greater.");
+    if (!kalshiCalc.valid || kalshiCalc.shares <= 0) {
+      return alert(
+        kalshiOrderType === "quick"
+          ? "Enter a valid amount to spend."
+          : "Enter a valid desired profit amount."
+      );
+    }
+
+    const stake = kalshiCalc.totalCost;
+    const placedAtIso = new Date(placedDate + "T00:00:00").toISOString();
+    const payoutOverride = kalshiActualPayout === "" ? null : Number(kalshiActualPayout);
+
+    let payout: number | null = null;
+    let profit: number | null = null;
+    let settledAtIso: string | null = null;
+
+    if (typeof payoutOverride === "number" && Number.isFinite(payoutOverride)) {
+      payout = round2(payoutOverride);
+      profit = round2(payout - stake);
+      settledAtIso = kalshiStatus === "open" ? null : placedAtIso;
+    } else if (kalshiStatus === "won") {
+      payout = kalshiCalc.payout;
+      profit = round2(payout - stake);
+      settledAtIso = placedAtIso;
+    } else if (kalshiStatus === "lost") {
+      payout = 0;
+      profit = round2(0 - stake);
+      settledAtIso = placedAtIso;
+    } else if (kalshiStatus === "void") {
+      payout = stake;
+      profit = 0;
+      settledAtIso = placedAtIso;
+    }
+
+    const { error } = await supabase.from("tickets").insert({
+      user_id: user.id,
+      ticket_type: "single",
+      bet_source: "kalshi",
+      stake,
+      book: "Kalshi",
+      league: kalshiCategory.trim() === "" ? null : kalshiCategory.trim(),
+      market_title: marketTitle.trim(),
+      kalshi_side: kalshiSide,
+      kalshi_price_cents: Number(kalshiPriceCents),
+      kalshi_shares: kalshiCalc.shares,
+      kalshi_fee: kalshiCalc.fee,
+      status: kalshiStatus,
+      placed_at: placedAtIso,
+      payout,
+      profit,
+      settled_at: settledAtIso,
+    });
+
+    if (error) {
+      console.error("Kalshi ticket insert failed:", error);
+      alert(`Error saving ticket: ${error.message}`);
+      return;
+    }
+
+    router.push("/");
+  }
+
   async function save() {
     const user = (await supabase.auth.getUser()).data.user;
     if (!user) {
@@ -432,10 +661,12 @@ export default function NewTicketPage() {
           <div>
             <div className="text-xs font-semibold text-zinc-500">Create</div>
             <h1 className="text-xl font-bold tracking-tight">New Bet</h1>
-            <div className="mt-1 text-xs text-zinc-600">
-              Default To Win:{" "}
-              {unitLoading ? "Loading unit…" : `${unitSize.toFixed(2)} (1 Unit)`}
-            </div>
+            {betSource === "sportsbook" && (
+              <div className="mt-1 text-xs text-zinc-600">
+                Default To Win:{" "}
+                {unitLoading ? "Loading unit…" : `${unitSize.toFixed(2)} (1 Unit)`}
+              </div>
+            )}
           </div>
 
           <Link href="/" className="text-sm font-semibold text-zinc-700 hover:underline">
@@ -443,7 +674,259 @@ export default function NewTicketPage() {
           </Link>
         </div>
 
+        {/* Source toggle */}
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => setBetSource("kalshi")}
+            className="h-10 rounded-xl border border-zinc-200 text-sm font-extrabold"
+            style={{
+              background: betSource === "kalshi" ? "#111" : "white",
+              color: betSource === "kalshi" ? "white" : "#111",
+            }}
+          >
+            Kalshi
+          </button>
+          <button
+            type="button"
+            onClick={() => setBetSource("sportsbook")}
+            className="h-10 rounded-xl border border-zinc-200 text-sm font-extrabold"
+            style={{
+              background: betSource === "sportsbook" ? "#111" : "white",
+              color: betSource === "sportsbook" ? "white" : "#111",
+            }}
+          >
+            Standard
+          </button>
+        </div>
+
+        {betSource === "kalshi" ? (
+          <>
+            {/* Kalshi Market */}
+            <div className={`mt-4 ${cardClass}`}>
+              <div className="mb-2 text-sm font-bold">Market</div>
+
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-4">
+                <div className="col-span-1 sm:col-span-2 md:col-span-4">
+                  <FieldLabel>Market question</FieldLabel>
+                  <input
+                    value={marketTitle}
+                    onChange={(e) => setMarketTitle(e.target.value)}
+                    placeholder="e.g. Will the Fed cut rates in March?"
+                    className={inputClass}
+                  />
+                </div>
+
+                <div className="col-span-1 md:col-span-2">
+                  <FieldLabel>Category</FieldLabel>
+                  <input
+                    value={kalshiCategory}
+                    onChange={(e) => setKalshiCategory(e.target.value)}
+                    placeholder="Select or type…"
+                    className={inputClass}
+                    list="kalshi_category_options"
+                  />
+                  <datalist id="kalshi_category_options">
+                    {KALSHI_CATEGORY_OPTIONS.map((c) => (
+                      <option key={c} value={c} />
+                    ))}
+                  </datalist>
+                </div>
+
+                <div className="col-span-1">
+                  <FieldLabel>Date</FieldLabel>
+                  <input
+                    type="date"
+                    value={placedDate}
+                    onChange={(e) => setPlacedDate(e.target.value)}
+                    className={inputClass}
+                  />
+                </div>
+
+                <div className="col-span-1">
+                  <FieldLabel>Side</FieldLabel>
+                  <div className="flex h-9 items-center gap-3 rounded-lg border border-zinc-200 bg-white px-2 text-xs font-semibold text-zinc-700">
+                    <label className="flex items-center gap-1">
+                      <input
+                        type="radio"
+                        checked={kalshiSide === "yes"}
+                        onChange={() => setKalshiSide("yes")}
+                      />
+                      Yes
+                    </label>
+                    <label className="flex items-center gap-1">
+                      <input
+                        type="radio"
+                        checked={kalshiSide === "no"}
+                        onChange={() => setKalshiSide("no")}
+                      />
+                      No
+                    </label>
+                  </div>
+                </div>
+
+                <div className="col-span-1 md:col-span-2">
+                  <FieldLabel>Status</FieldLabel>
+                  <select
+                    value={kalshiStatus}
+                    onChange={(e) => setKalshiStatus(e.target.value as KalshiStatus)}
+                    className={selectClass}
+                  >
+                    <option value="open">open</option>
+                    <option value="won">won</option>
+                    <option value="lost">lost</option>
+                    <option value="void">void</option>
+                  </select>
+                </div>
+
+                <div className="col-span-1 md:col-span-2">
+                  <FieldLabel>Actual payout (optional)</FieldLabel>
+                  <input
+                    value={kalshiActualPayout}
+                    onChange={(e) =>
+                      setKalshiActualPayout(e.target.value === "" ? "" : String(Number(e.target.value)))
+                    }
+                    placeholder="Total return incl. cost"
+                    className={inputClass}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Kalshi Order */}
+            <div className={`mt-3 ${cardClass}`}>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-sm font-bold">Order</div>
+                <div className="flex items-center gap-3 text-xs font-semibold text-zinc-600">
+                  <label className="flex items-center gap-1">
+                    <input
+                      type="radio"
+                      checked={kalshiOrderType === "quick"}
+                      onChange={() => selectKalshiOrderType("quick")}
+                    />
+                    Quick (Market)
+                  </label>
+                  <label className="flex items-center gap-1">
+                    <input
+                      type="radio"
+                      checked={kalshiOrderType === "limit"}
+                      onChange={() => selectKalshiOrderType("limit")}
+                    />
+                    Limit
+                  </label>
+                </div>
+              </div>
+
+              <div className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-4">
+                <div className="col-span-1">
+                  <FieldLabel>Price (¢)</FieldLabel>
+                  <input
+                    value={kalshiPriceCents}
+                    onChange={(e) => setKalshiPriceCents(e.target.value)}
+                    className={inputClass}
+                  />
+                  <div className="mt-1 text-[11px] text-zinc-500">
+                    Decimal: {kalshiCalc.decimalOdds ?? "—"}
+                  </div>
+                </div>
+
+                <div className="col-span-1">
+                  <FieldLabel>Fee rate (%)</FieldLabel>
+                  <input
+                    value={kalshiFeeRatePct}
+                    onChange={(e) => setKalshiFeeRatePct(e.target.value)}
+                    className={inputClass}
+                  />
+                  <div className="mt-1 text-[11px] text-zinc-500">
+                    {kalshiOrderType === "quick" ? "Taker default: 7%" : "Maker default: 0%"}
+                  </div>
+                </div>
+
+                {kalshiOrderType === "quick" ? (
+                  <div className="col-span-2">
+                    <FieldLabel>Amount to spend ($)</FieldLabel>
+                    <input
+                      value={kalshiSpendInput}
+                      onChange={(e) => setKalshiSpendInput(e.target.value)}
+                      placeholder="e.g. 500"
+                      className={inputClass}
+                    />
+                  </div>
+                ) : (
+                  <div className="col-span-2">
+                    <FieldLabel>Desired profit if correct ($)</FieldLabel>
+                    <input
+                      value={kalshiWinInput}
+                      onChange={(e) => setKalshiWinInput(e.target.value)}
+                      placeholder="e.g. 500"
+                      className={inputClass}
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-3 grid grid-cols-2 gap-2 border-t border-zinc-100 pt-3 md:grid-cols-4">
+                <div>
+                  <FieldLabel>Shares</FieldLabel>
+                  <div className="h-9 rounded-lg border border-zinc-200 bg-zinc-50 px-2 text-sm leading-9 text-zinc-700">
+                    {kalshiCalc.valid ? fmtInt(kalshiCalc.shares) : "—"}
+                  </div>
+                </div>
+                <div>
+                  <FieldLabel>Fee</FieldLabel>
+                  <div className="h-9 rounded-lg border border-zinc-200 bg-zinc-50 px-2 text-sm leading-9 text-zinc-700">
+                    {kalshiCalc.valid ? `$${fmtUsd(kalshiCalc.fee)}` : "—"}
+                  </div>
+                </div>
+                <div>
+                  <FieldLabel>Total cost</FieldLabel>
+                  <div className="h-9 rounded-lg border border-zinc-200 bg-zinc-50 px-2 text-sm leading-9 text-zinc-700">
+                    {kalshiCalc.valid ? `$${fmtUsd(kalshiCalc.totalCost)}` : "—"}
+                  </div>
+                </div>
+                {kalshiOrderType === "quick" ? (
+                  <div>
+                    <FieldLabel>Leftover</FieldLabel>
+                    <div className="h-9 rounded-lg border border-zinc-200 bg-zinc-50 px-2 text-sm leading-9 text-zinc-700">
+                      {kalshiCalc.valid ? `$${fmtUsd(kalshiCalc.leftover)}` : "—"}
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <FieldLabel>Max loss</FieldLabel>
+                    <div className="h-9 rounded-lg border border-zinc-200 bg-zinc-50 px-2 text-sm leading-9 text-zinc-700">
+                      {kalshiCalc.valid ? `$${fmtUsd(kalshiCalc.totalCost)}` : "—"}
+                    </div>
+                  </div>
+                )}
+                <div>
+                  <FieldLabel>Payout if correct</FieldLabel>
+                  <div className="h-9 rounded-lg border border-zinc-200 bg-zinc-50 px-2 text-sm leading-9 text-zinc-700">
+                    {kalshiCalc.valid ? `$${fmtUsd(kalshiCalc.payout)}` : "—"}
+                  </div>
+                </div>
+                <div>
+                  <FieldLabel>Profit if correct</FieldLabel>
+                  <div className="h-9 rounded-lg border border-zinc-200 bg-zinc-50 px-2 text-sm leading-9 text-zinc-700">
+                    {kalshiCalc.valid ? `$${fmtUsd(kalshiCalc.profit)}` : "—"}
+                  </div>
+                </div>
+                {kalshiOrderType === "quick" && (
+                  <div>
+                    <FieldLabel>Max loss</FieldLabel>
+                    <div className="h-9 rounded-lg border border-zinc-200 bg-zinc-50 px-2 text-sm leading-9 text-zinc-700">
+                      {kalshiCalc.valid ? `$${fmtUsd(kalshiCalc.totalCost)}` : "—"}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </>
+        ) : null}
+
         {/* Ticket Info */}
+        {betSource === "sportsbook" && (
+        <>
         <div className={`mt-4 ${cardClass}`}>
           <div className="mb-2 text-sm font-bold">Ticket</div>
 
@@ -719,6 +1202,8 @@ export default function NewTicketPage() {
             ))}
           </div>
         </div>
+        </>
+        )}
 
         {/* bottom padding so sticky bar doesn't cover content */}
         <div className="h-20" />
@@ -731,7 +1216,11 @@ export default function NewTicketPage() {
             <button type="button" onClick={() => router.push("/")} className={smallBtn}>
               Cancel
             </button>
-            <button type="button" onClick={save} className={primaryBtn}>
+            <button
+              type="button"
+              onClick={betSource === "kalshi" ? saveKalshi : save}
+              className={primaryBtn}
+            >
               Save
             </button>
           </div>
