@@ -152,6 +152,7 @@ export default function TicketPage() {
   const [kalshiMarketTitle, setKalshiMarketTitle] = useState("");
   const [kalshiSideEdit, setKalshiSideEdit] = useState<"yes" | "no">("yes");
   const [kalshiPriceCentsInput, setKalshiPriceCentsInput] = useState("");
+  const [kalshiDecimalInput, setKalshiDecimalInput] = useState("");
   const [kalshiSharesInput, setKalshiSharesInput] = useState("");
   const [kalshiFeeInput, setKalshiFeeInput] = useState("");
   const [kalshiStatusEdit, setKalshiStatusEdit] = useState<KalshiStatus>("open");
@@ -232,10 +233,14 @@ export default function TicketPage() {
       if (ticketRow.bet_source === "kalshi") {
         setKalshiMarketTitle(ticketRow.market_title ?? "");
         setKalshiSideEdit(ticketRow.kalshi_side === "no" ? "no" : "yes");
+        const loadedCents = ticketRow.kalshi_price_cents;
         setKalshiPriceCentsInput(
-          ticketRow.kalshi_price_cents === null || ticketRow.kalshi_price_cents === undefined
-            ? ""
-            : String(ticketRow.kalshi_price_cents)
+          loadedCents === null || loadedCents === undefined ? "" : String(loadedCents)
+        );
+        setKalshiDecimalInput(
+          typeof loadedCents === "number" && loadedCents >= 1 && loadedCents <= 99
+            ? String(round2(100 / loadedCents))
+            : ""
         );
         setKalshiSharesInput(
           ticketRow.kalshi_shares === null || ticketRow.kalshi_shares === undefined
@@ -281,6 +286,27 @@ export default function TicketPage() {
     if (!ticket) return { multiplier: 1, multiplierValid: false };
     return computeMultiplier(ticket.ticket_type, legs);
   }, [ticket, legs]);
+
+  // Price (¢) and decimal odds are two views of the same number — editing
+  // either updates the other, same as the New Bet page.
+  function updateKalshiPriceCents(value: string) {
+    setKalshiPriceCentsInput(value);
+    const cents = Number(value);
+    if (Number.isInteger(cents) && cents >= 1 && cents <= 99) {
+      setKalshiDecimalInput(String(round2(100 / cents)));
+    }
+  }
+
+  function updateKalshiDecimalOdds(value: string) {
+    setKalshiDecimalInput(value);
+    const dec = Number(value);
+    if (Number.isFinite(dec) && dec > 1) {
+      const cents = Math.round(100 / dec);
+      if (cents >= 1 && cents <= 99) {
+        setKalshiPriceCentsInput(String(cents));
+      }
+    }
+  }
 
   // Editing an existing Kalshi position just needs the actual price/shares/fee
   // that happened — no need to re-solve the buy-side calculator from new/page.tsx.
@@ -674,7 +700,16 @@ export default function TicketPage() {
               <FieldLabel>Price (¢)</FieldLabel>
               <input
                 value={kalshiPriceCentsInput}
-                onChange={(e) => setKalshiPriceCentsInput(e.target.value)}
+                onChange={(e) => updateKalshiPriceCents(e.target.value)}
+                className={inputClass}
+              />
+            </div>
+
+            <div className="col-span-1">
+              <FieldLabel>Decimal odds</FieldLabel>
+              <input
+                value={kalshiDecimalInput}
+                onChange={(e) => updateKalshiDecimalOdds(e.target.value)}
                 className={inputClass}
               />
             </div>

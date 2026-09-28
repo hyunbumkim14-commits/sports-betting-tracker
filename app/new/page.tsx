@@ -58,20 +58,6 @@ const LEAGUE_OPTIONS = [
   "OTHER",
 ] as const;
 
-const KALSHI_CATEGORY_OPTIONS = [
-  "POLITICS",
-  "ECONOMICS",
-  "FINANCIALS",
-  "WEATHER",
-  "CLIMATE",
-  "SPORTS",
-  "CRYPTO",
-  "CULTURE",
-  "SCIENCE",
-  "WORLD",
-  "OTHER",
-] as const;
-
 function fmtUsd(n: number) {
   return new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(
     Number.isFinite(n) ? n : 0
@@ -172,10 +158,10 @@ export default function NewTicketPage() {
 
   // Kalshi state
   const [marketTitle, setMarketTitle] = useState("");
-  const [kalshiCategory, setKalshiCategory] = useState("");
   const [kalshiSide, setKalshiSide] = useState<"yes" | "no">("yes");
   const [kalshiOrderType, setKalshiOrderType] = useState<"quick" | "limit">("quick");
   const [kalshiPriceCents, setKalshiPriceCents] = useState("50");
+  const [kalshiDecimalInput, setKalshiDecimalInput] = useState("2.00");
   const [kalshiFeeRatePct, setKalshiFeeRatePct] = useState("7");
   const [kalshiSpendInput, setKalshiSpendInput] = useState("");
   const [kalshiWinInput, setKalshiWinInput] = useState("");
@@ -231,6 +217,28 @@ export default function NewTicketPage() {
     // Quick orders take liquidity (taker fee, ~7% default); resting limit
     // orders are typically maker (no fee by default). Still fully editable.
     setKalshiFeeRatePct(next === "quick" ? "7" : "0");
+  }
+
+  // Price (¢) and decimal odds are two views of the same number — editing
+  // either one updates the other. Some quick-market entries only show
+  // decimal odds, not a cents price, so both need to be directly editable.
+  function updateKalshiPriceCents(value: string) {
+    setKalshiPriceCents(value);
+    const cents = Number(value);
+    if (Number.isInteger(cents) && cents >= 1 && cents <= 99) {
+      setKalshiDecimalInput(String(round2(100 / cents)));
+    }
+  }
+
+  function updateKalshiDecimalOdds(value: string) {
+    setKalshiDecimalInput(value);
+    const dec = Number(value);
+    if (Number.isFinite(dec) && dec > 1) {
+      const cents = Math.round(100 / dec);
+      if (cents >= 1 && cents <= 99) {
+        setKalshiPriceCents(String(cents));
+      }
+    }
   }
 
   const kalshiCalc = useMemo(() => {
@@ -477,6 +485,7 @@ export default function NewTicketPage() {
     }
 
     if (!placedDate) return alert("Please select a date.");
+    if (!league.trim()) return alert("Please select a league.");
     if (!marketTitle.trim()) return alert("Please enter the market question.");
     if (!kalshiCalc.priceValid) return alert("Price must be a whole number between 1 and 99 cents.");
     if (!kalshiCalc.feeRateValid) return alert("Fee rate must be 0 or greater.");
@@ -520,7 +529,7 @@ export default function NewTicketPage() {
       bet_source: "kalshi",
       stake,
       book: "Kalshi",
-      league: kalshiCategory.trim() === "" ? null : kalshiCategory.trim(),
+      league: league.trim() === "" ? null : league.trim(),
       market_title: marketTitle.trim(),
       kalshi_side: kalshiSide,
       kalshi_price_cents: Number(kalshiPriceCents),
@@ -718,17 +727,17 @@ export default function NewTicketPage() {
                 </div>
 
                 <div className="col-span-1 md:col-span-2">
-                  <FieldLabel>Category</FieldLabel>
+                  <FieldLabel>League</FieldLabel>
                   <input
-                    value={kalshiCategory}
-                    onChange={(e) => setKalshiCategory(e.target.value)}
+                    value={league}
+                    onChange={(e) => setLeague(e.target.value)}
                     placeholder="Select or type…"
                     className={inputClass}
-                    list="kalshi_category_options"
+                    list="league_options"
                   />
-                  <datalist id="kalshi_category_options">
-                    {KALSHI_CATEGORY_OPTIONS.map((c) => (
-                      <option key={c} value={c} />
+                  <datalist id="league_options">
+                    {LEAGUE_OPTIONS.map((l) => (
+                      <option key={l} value={l} />
                     ))}
                   </datalist>
                 </div>
@@ -822,12 +831,19 @@ export default function NewTicketPage() {
                   <FieldLabel>Price (¢)</FieldLabel>
                   <input
                     value={kalshiPriceCents}
-                    onChange={(e) => setKalshiPriceCents(e.target.value)}
+                    onChange={(e) => updateKalshiPriceCents(e.target.value)}
                     className={inputClass}
                   />
-                  <div className="mt-1 text-[11px] text-zinc-500">
-                    Decimal: {kalshiCalc.decimalOdds ?? "—"}
-                  </div>
+                </div>
+
+                <div className="col-span-1">
+                  <FieldLabel>Decimal odds</FieldLabel>
+                  <input
+                    value={kalshiDecimalInput}
+                    onChange={(e) => updateKalshiDecimalOdds(e.target.value)}
+                    className={inputClass}
+                  />
+                  <div className="mt-1 text-[11px] text-zinc-500">No share price? Enter this instead.</div>
                 </div>
 
                 <div className="col-span-1">
