@@ -160,6 +160,8 @@ export default function NewTicketPage() {
   const [marketTitle, setMarketTitle] = useState("");
   const [kalshiSide, setKalshiSide] = useState<"yes" | "no">("yes");
   const [kalshiOrderType, setKalshiOrderType] = useState<"quick" | "limit">("quick");
+  // Independent of order type: which amount you're entering, for either order type.
+  const [kalshiAmountMode, setKalshiAmountMode] = useState<"spend" | "win">("spend");
   const [kalshiPriceCents, setKalshiPriceCents] = useState("50");
   const [kalshiDecimalInput, setKalshiDecimalInput] = useState("2.00");
   const [kalshiFeeRatePct, setKalshiFeeRatePct] = useState("7");
@@ -254,7 +256,7 @@ export default function NewTicketPage() {
     let inputValid = false;
 
     if (priceValid && feeRateValid) {
-      if (kalshiOrderType === "quick") {
+      if (kalshiAmountMode === "spend") {
         const spend = Number(kalshiSpendInput);
         inputValid = Number.isFinite(spend) && spend > 0;
         if (inputValid) shares = solveKalshiQuickShares(spend, priceDollars, feeRate);
@@ -272,13 +274,13 @@ export default function NewTicketPage() {
     const profit = valid ? round2(payout - totalCost) : 0;
     const spendNum = Number(kalshiSpendInput);
     const leftover =
-      valid && kalshiOrderType === "quick" && Number.isFinite(spendNum)
+      valid && kalshiAmountMode === "spend" && Number.isFinite(spendNum)
         ? round2(spendNum - totalCost)
         : 0;
     const decimalOdds = priceValid ? round2(1 / priceDollars) : null;
 
     return { priceValid, priceDollars, feeRateValid, valid, shares, fee, totalCost, payout, profit, leftover, decimalOdds };
-  }, [kalshiPriceCents, kalshiFeeRatePct, kalshiOrderType, kalshiSpendInput, kalshiWinInput]);
+  }, [kalshiPriceCents, kalshiFeeRatePct, kalshiAmountMode, kalshiSpendInput, kalshiWinInput]);
 
   // ✅ derive decimal multiplier for the ticket (single or parlay)
   const { multiplier, multiplierValid } = useMemo(() => {
@@ -491,7 +493,7 @@ export default function NewTicketPage() {
     if (!kalshiCalc.feeRateValid) return alert("Fee rate must be 0 or greater.");
     if (!kalshiCalc.valid || kalshiCalc.shares <= 0) {
       return alert(
-        kalshiOrderType === "quick"
+        kalshiAmountMode === "spend"
           ? "Enter a valid amount to spend."
           : "Enter a valid desired profit amount."
       );
@@ -826,6 +828,26 @@ export default function NewTicketPage() {
                 </div>
               </div>
 
+              <div className="mt-2 flex items-center gap-3 text-xs font-semibold text-zinc-600">
+                <span className="text-[11px] font-semibold text-zinc-500">Amount:</span>
+                <label className="flex items-center gap-1">
+                  <input
+                    type="radio"
+                    checked={kalshiAmountMode === "spend"}
+                    onChange={() => setKalshiAmountMode("spend")}
+                  />
+                  Spend $
+                </label>
+                <label className="flex items-center gap-1">
+                  <input
+                    type="radio"
+                    checked={kalshiAmountMode === "win"}
+                    onChange={() => setKalshiAmountMode("win")}
+                  />
+                  To Win $
+                </label>
+              </div>
+
               <div className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-4">
                 <div className="col-span-1">
                   <FieldLabel>Price (¢)</FieldLabel>
@@ -858,7 +880,7 @@ export default function NewTicketPage() {
                   </div>
                 </div>
 
-                {kalshiOrderType === "quick" ? (
+                {kalshiAmountMode === "spend" ? (
                   <div className="col-span-2">
                     <FieldLabel>Amount to spend ($)</FieldLabel>
                     <input
@@ -900,7 +922,7 @@ export default function NewTicketPage() {
                     {kalshiCalc.valid ? `$${fmtUsd(kalshiCalc.totalCost)}` : "—"}
                   </div>
                 </div>
-                {kalshiOrderType === "quick" ? (
+                {kalshiAmountMode === "spend" ? (
                   <div>
                     <FieldLabel>Leftover</FieldLabel>
                     <div className="h-9 rounded-lg border border-zinc-200 bg-zinc-50 px-2 text-sm leading-9 text-zinc-700">
@@ -927,7 +949,7 @@ export default function NewTicketPage() {
                     {kalshiCalc.valid ? `$${fmtUsd(kalshiCalc.profit)}` : "—"}
                   </div>
                 </div>
-                {kalshiOrderType === "quick" && (
+                {kalshiAmountMode === "spend" && (
                   <div>
                     <FieldLabel>Max loss</FieldLabel>
                     <div className="h-9 rounded-lg border border-zinc-200 bg-zinc-50 px-2 text-sm leading-9 text-zinc-700">
