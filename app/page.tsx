@@ -37,6 +37,7 @@ type Ticket = {
   kalshi_price_cents?: number | null;
   kalshi_shares?: number | null;
   kalshi_fee?: number | null;
+  kalshi_payout_if_correct?: number | null;
 };
 
 type Leg = {
@@ -287,9 +288,8 @@ function TicketCardInner({
               </div>
               <div className="mt-1 text-xs text-zinc-600">
                 Date: <span className="font-bold">{ticketDateForGrouping(t)}</span> • Side:{" "}
-                <span className="font-bold">{(t.kalshi_side ?? "—").toUpperCase()}</span> • Price:{" "}
-                <span className="font-bold">{t.kalshi_price_cents ?? "—"}¢</span> • Shares:{" "}
-                <span className="font-bold">{fmtNumber(t.kalshi_shares ?? 0)}</span>
+                <span className="font-bold">{(t.kalshi_side ?? "—").toUpperCase()}</span> • League:{" "}
+                <span className="font-bold">{t.league ?? "—"}</span>
               </div>
             </>
           ) : (
@@ -334,7 +334,7 @@ function TicketCardInner({
 
       {t.bet_source === "kalshi" ? (
         <div className="mt-2 text-[11px] text-zinc-500">
-          Fee: ${fmtMoney(t.kalshi_fee ?? 0)}
+          Payout if correct: ${fmtMoney(t.kalshi_payout_if_correct ?? t.stake)}
         </div>
       ) : (
         <TicketLines legs={legs} />
@@ -626,7 +626,7 @@ export default function DashboardPage() {
     const { data, error } = await supabase
       .from("tickets")
       .select(
-        "id, ticket_type, stake, status, book, payout, profit, placed_at, settled_at, league, bet_source, market_title, kalshi_side, kalshi_price_cents, kalshi_shares, kalshi_fee"
+        "id, ticket_type, stake, status, book, payout, profit, placed_at, settled_at, league, bet_source, market_title, kalshi_side, kalshi_price_cents, kalshi_shares, kalshi_fee, kalshi_payout_if_correct"
       )
       .order("placed_at", { ascending: false });
 
@@ -692,7 +692,7 @@ export default function DashboardPage() {
       profit = 0;
     } else if (status === "won") {
       if (t.bet_source === "kalshi") {
-        payout = round2(Number(t.kalshi_shares || 0) * 1);
+        payout = round2(Number(t.kalshi_payout_if_correct ?? stake));
         profit = round2(payout - stake);
       } else if (t.ticket_type === "single") {
         const a = legs[0]?.american_odds;

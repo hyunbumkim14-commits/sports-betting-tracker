@@ -24,6 +24,7 @@ type Ticket = {
   kalshi_price_cents?: number | null;
   kalshi_shares?: number | null;
   kalshi_fee?: number | null;
+  kalshi_payout_if_correct?: number | null;
 };
 
 type KalshiStatus = "open" | "won" | "lost" | "void";
@@ -148,14 +149,19 @@ export default function TicketPage() {
   const [payoutInput, setPayoutInput] = useState("");
   const [payoutEdited, setPayoutEdited] = useState(false);
 
-  // Kalshi-specific edit state
+  // Kalshi-specific edit state — same simplified risk/payout model as new/page.tsx.
+  // Price/shares/fee are reference-only (populated only if "Bet to Win" was used
+  // at creation) and shown read-only; they aren't used to compute profit/payout.
   const [kalshiMarketTitle, setKalshiMarketTitle] = useState("");
   const [kalshiSideEdit, setKalshiSideEdit] = useState<"yes" | "no">("yes");
-  const [kalshiPriceCentsInput, setKalshiPriceCentsInput] = useState("");
-  const [kalshiDecimalInput, setKalshiDecimalInput] = useState("");
-  const [kalshiSharesInput, setKalshiSharesInput] = useState("");
-  const [kalshiFeeInput, setKalshiFeeInput] = useState("");
+  const [kalshiRiskInput, setKalshiRiskInput] = useState("");
+  const [kalshiPayoutInput, setKalshiPayoutInput] = useState("");
   const [kalshiStatusEdit, setKalshiStatusEdit] = useState<KalshiStatus>("open");
+  const [kalshiReference, setKalshiReference] = useState<{
+    priceCents: number | null;
+    shares: number | null;
+    fee: number | null;
+  } | null>(null);
 
   // ✅ Compact UI tokens
   const inputClass =
@@ -233,29 +239,25 @@ export default function TicketPage() {
       if (ticketRow.bet_source === "kalshi") {
         setKalshiMarketTitle(ticketRow.market_title ?? "");
         setKalshiSideEdit(ticketRow.kalshi_side === "no" ? "no" : "yes");
-        const loadedCents = ticketRow.kalshi_price_cents;
-        setKalshiPriceCentsInput(
-          loadedCents === null || loadedCents === undefined ? "" : String(loadedCents)
-        );
-        setKalshiDecimalInput(
-          typeof loadedCents === "number" && loadedCents >= 1 && loadedCents <= 99
-            ? String(round2(100 / loadedCents))
-            : ""
-        );
-        setKalshiSharesInput(
-          ticketRow.kalshi_shares === null || ticketRow.kalshi_shares === undefined
+        setKalshiRiskInput(String(ticketRow.stake ?? 0));
+        setKalshiPayoutInput(
+          ticketRow.kalshi_payout_if_correct === null || ticketRow.kalshi_payout_if_correct === undefined
             ? ""
-            : String(ticketRow.kalshi_shares)
-        );
-        setKalshiFeeInput(
-          ticketRow.kalshi_fee === null || ticketRow.kalshi_fee === undefined
-            ? "0"
-            : String(ticketRow.kalshi_fee)
+            : String(ticketRow.kalshi_payout_if_correct)
         );
         setKalshiStatusEdit(
           ticketRow.status === "won" || ticketRow.status === "lost" || ticketRow.status === "void"
             ? ticketRow.status
             : "open"
+        );
+        setKalshiReference(
+          ticketRow.kalshi_price_cents == null && ticketRow.kalshi_shares == null
+            ? null
+            : {
+                priceCents: ticketRow.kalshi_price_cents ?? null,
+                shares: ticketRow.kalshi_shares ?? null,
+                fee: ticketRow.kalshi_fee ?? null,
+              }
         );
       }
 
@@ -287,55 +289,23 @@ export default function TicketPage() {
     return computeMultiplier(ticket.ticket_type, legs);
   }, [ticket, legs]);
 
-  // Price (¢) and decimal odds are two views of the same number — editing
-  // either updates the other, same as the New Bet page.
-  function updateKalshiPriceCents(value: string) {
-    setKalshiPriceCentsInput(value);
-    const cents = Number(value);
-    if (Number.isInteger(cents) && cents >= 1 && cents <= 99) {
-      setKalshiDecimalInput(String(round2(100 / cents)));
-    }
-  }
-
-  function updateKalshiDecimalOdds(value: string) {
-    setKalshiDecimalInput(value);
-    const dec = Number(value);
-    if (Number.isFinite(dec) && dec > 1) {
-      const cents = Math.round(100 / dec);
-      if (cents >= 1 && cents <= 99) {
-        setKalshiPriceCentsInput(String(cents));
-      }
-    }
-  }
-
-  // Editing an existing Kalshi position just needs the actual price/shares/fee
-  // that happened — no need to re-solve the buy-side calculator from new/page.tsx.
+  // Same simple risk/payout subtraction model as new/page.tsx — no odds/fee math.
   const kalshiEditCalc = useMemo(() => {
-    const priceCents = Number(kalshiPriceCentsInput);
-    const priceValid = Number.isInteger(priceCents) && priceCents >= 1 && priceCents <= 99;
-    const priceDollars = priceValid ? priceCents / 100 : 0;
+    const risk = Number(kalshiRiskInput);
+    const riskValid = Number.isFinite(risk) && risk > 0;
+    const stake = riskValid ? round2(risk) : 0;
 
-    const shares = Number(kalshiSharesInput);
-    const sharesValid = Number.isFinite(shares) && shares > 0;
+    const payoutIfCorrect = Number(kalshiPayoutInput);
+    const payoutValid = Number.isFinite(payoutIfCorrect) && payoutIfCorrect >= 0;
 
-    const fee = Number(kalshiFeeInput);
-    const feeValid = Number.isFinite(fee) && fee >= 0;
-
-    const valid = priceValid && sharesValid && feeValid;
-    const stake = valid ? round2(shares * priceDollars + fee) : 0;
+    const valid = riskValid && payoutValid;
 
     let payout: number | null = null;
     let profit: number | null = null;
 
     if (valid) {
-      if (payoutEdited && payoutInput.trim() !== "") {
-        const p = Number(payoutInput);
-        if (Number.isFinite(p)) {
-          payout = round2(p);
-          profit = round2(payout - stake);
-        }
-      } else if (kalshiStatusEdit === "won") {
-        payout = round2(shares * 1);
+      if (kalshiStatusEdit === "won") {
+        payout = round2(payoutIfCorrect);
         profit = round2(payout - stake);
       } else if (kalshiStatusEdit === "lost") {
         payout = 0;
@@ -346,8 +316,8 @@ export default function TicketPage() {
       }
     }
 
-    return { priceValid, priceDollars, sharesValid, feeValid, valid, shares, fee, stake, payout, profit };
-  }, [kalshiPriceCentsInput, kalshiSharesInput, kalshiFeeInput, kalshiStatusEdit, payoutInput, payoutEdited]);
+    return { riskValid, payoutValid, valid, stake, payout, profit };
+  }, [kalshiRiskInput, kalshiPayoutInput, kalshiStatusEdit]);
 
   function setToWinFromRisk(nextRiskStr: string) {
     setBetInput(nextRiskStr);
@@ -423,9 +393,8 @@ export default function TicketPage() {
     if (!ticket) return;
     if (!placedDate) return alert("Please select a date.");
     if (!kalshiMarketTitle.trim()) return alert("Please enter the market question.");
-    if (!kalshiEditCalc.priceValid) return alert("Price must be a whole number between 1 and 99 cents.");
-    if (!kalshiEditCalc.sharesValid) return alert("Shares must be a positive number.");
-    if (!kalshiEditCalc.feeValid) return alert("Fee must be 0 or greater.");
+    if (!kalshiEditCalc.riskValid) return alert("Please enter a valid risk amount.");
+    if (!kalshiEditCalc.payoutValid) return alert("Please enter a valid payout if correct.");
 
     const placedAtIso = new Date(placedDate + "T00:00:00").toISOString();
     const settledAtIso = kalshiStatusEdit === "open" ? null : placedAtIso;
@@ -437,9 +406,7 @@ export default function TicketPage() {
         market_title: kalshiMarketTitle.trim(),
         league: league.trim() === "" ? null : league.trim(),
         kalshi_side: kalshiSideEdit,
-        kalshi_price_cents: Number(kalshiPriceCentsInput),
-        kalshi_shares: kalshiEditCalc.shares,
-        kalshi_fee: kalshiEditCalc.fee,
+        kalshi_payout_if_correct: round2(Number(kalshiPayoutInput)),
         stake: kalshiEditCalc.stake,
         status: kalshiStatusEdit,
         payout: kalshiEditCalc.payout,
@@ -454,7 +421,6 @@ export default function TicketPage() {
       return;
     }
 
-    setPayoutEdited(false);
     router.push(backHref);
   }
 
@@ -696,49 +662,6 @@ export default function TicketPage() {
               </div>
             </div>
 
-            <div className="col-span-1">
-              <FieldLabel>Price (¢)</FieldLabel>
-              <input
-                value={kalshiPriceCentsInput}
-                onChange={(e) => updateKalshiPriceCents(e.target.value)}
-                className={inputClass}
-              />
-            </div>
-
-            <div className="col-span-1">
-              <FieldLabel>Decimal odds</FieldLabel>
-              <input
-                value={kalshiDecimalInput}
-                onChange={(e) => updateKalshiDecimalOdds(e.target.value)}
-                className={inputClass}
-              />
-            </div>
-
-            <div className="col-span-1">
-              <FieldLabel>Shares</FieldLabel>
-              <input
-                value={kalshiSharesInput}
-                onChange={(e) => setKalshiSharesInput(e.target.value)}
-                className={inputClass}
-              />
-            </div>
-
-            <div className="col-span-1">
-              <FieldLabel>Fee ($)</FieldLabel>
-              <input
-                value={kalshiFeeInput}
-                onChange={(e) => setKalshiFeeInput(e.target.value)}
-                className={inputClass}
-              />
-            </div>
-
-            <div className="col-span-1">
-              <FieldLabel>Total cost</FieldLabel>
-              <div className="h-9 rounded-lg border border-zinc-200 bg-zinc-50 px-2 text-sm leading-9 text-zinc-700">
-                {kalshiEditCalc.valid ? `$${kalshiEditCalc.stake.toFixed(2)}` : "—"}
-              </div>
-            </div>
-
             <div className="col-span-1 md:col-span-2">
               <FieldLabel>Status</FieldLabel>
               <select
@@ -752,20 +675,39 @@ export default function TicketPage() {
                 <option value="void">void</option>
               </select>
             </div>
+          </div>
+        </div>
 
-            <div className="col-span-1 md:col-span-2">
-              <FieldLabel>Actual payout (optional)</FieldLabel>
+        {/* Kalshi Risk / Payout */}
+        <div className={`mt-3 ${cardClass}`}>
+          <div className="mb-2 text-sm font-bold">Risk &amp; Payout</div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <FieldLabel>Risk ($)</FieldLabel>
               <input
-                value={payoutInput}
-                onChange={(e) => {
-                  setPayoutInput(e.target.value);
-                  setPayoutEdited(true);
-                }}
-                placeholder="Total return incl. cost"
+                value={kalshiRiskInput}
+                onChange={(e) => setKalshiRiskInput(e.target.value)}
+                className={inputClass}
+              />
+            </div>
+            <div>
+              <FieldLabel>Payout if correct ($)</FieldLabel>
+              <input
+                value={kalshiPayoutInput}
+                onChange={(e) => setKalshiPayoutInput(e.target.value)}
                 className={inputClass}
               />
             </div>
           </div>
+
+          {kalshiReference && (
+            <div className="mt-2 text-[11px] text-zinc-500">
+              Originally calculated: {kalshiReference.shares ?? "—"} shares @{" "}
+              {kalshiReference.priceCents ?? "—"}¢, fee $
+              {kalshiReference.fee != null ? kalshiReference.fee.toFixed(2) : "—"}
+            </div>
+          )}
         </div>
         </>
         ) : (
