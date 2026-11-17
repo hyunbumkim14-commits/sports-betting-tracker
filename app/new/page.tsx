@@ -67,8 +67,8 @@ function fmtInt(n: number) {
   return new Intl.NumberFormat("en-US").format(Number.isFinite(n) ? n : 0);
 }
 
-// Kalshi charges a fee on the whole order, rounded up to the cent — not
-// summed per-contract — so this must be called with the total share count.
+// Fee is Theta x contracts x p x (1-p) on the whole order, rounded up to the cent here (not
+// summed per-contract). It's an estimate; the exchange's own rounding may differ slightly.
 function kalshiFee(shares: number, priceDollars: number, feeRate: number) {
   if (shares <= 0 || !Number.isFinite(priceDollars) || !Number.isFinite(feeRate)) return 0;
   const raw = feeRate * shares * priceDollars * (1 - priceDollars);
@@ -123,8 +123,23 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
 export default function NewTicketPage() {
   const router = useRouter();
 
-  // ✅ Kalshi is the default bet source
-  const [betSource, setBetSource] = useState<"kalshi" | "sportsbook">("kalshi");
+  // The "kalshi" value is the prediction-market (Polymarket) form. It's the default for new
+  // visitors, but each browser remembers the tab it last used. null = not decided yet (first
+  // paint), which keeps the saved tab from flashing the wrong form.
+  const [betSource, setBetSource] = useState<"kalshi" | "sportsbook" | null>(null);
+  useEffect(() => {
+    let saved: string | null = null;
+    try {
+      saved = localStorage.getItem("newBetSource");
+    } catch {}
+    setBetSource(saved === "sportsbook" ? "sportsbook" : "kalshi");
+  }, []);
+  function chooseBetSource(next: "kalshi" | "sportsbook") {
+    setBetSource(next);
+    try {
+      localStorage.setItem("newBetSource", next);
+    } catch {}
+  }
 
   // Kalshi state — every Kalshi bet is ultimately just risk $ + payout-if-correct $,
   // settled by subtraction, exactly like a sportsbook push/void override. "Bet to Win"
@@ -140,7 +155,7 @@ export default function NewTicketPage() {
   const [kalshiWinTarget, setKalshiWinTarget] = useState("");
   const [kalshiPriceCents, setKalshiPriceCents] = useState("50");
   const [kalshiDecimalInput, setKalshiDecimalInput] = useState("2.00");
-  const [kalshiFeeRatePct, setKalshiFeeRatePct] = useState("7");
+  const [kalshiFeeRatePct, setKalshiFeeRatePct] = useState("7.5");
 
   const [ticketType, setTicketType] = useState<"single" | "parlay">("single");
 
@@ -498,9 +513,9 @@ export default function NewTicketPage() {
     const { error } = await supabase.from("tickets").insert({
       user_id: user.id,
       ticket_type: "single",
-      bet_source: "kalshi",
+      bet_source: "polymarket",
       stake,
-      book: "Kalshi",
+      book: "Polymarket",
       league: league.trim() === "" ? null : league.trim(),
       market_title: marketTitle.trim(),
       kalshi_side: kalshiSide,
@@ -516,7 +531,7 @@ export default function NewTicketPage() {
     });
 
     if (error) {
-      console.error("Kalshi ticket insert failed:", error);
+      console.error("Polymarket ticket insert failed:", error);
       alert(`Error saving ticket: ${error.message}`);
       return;
     }
@@ -660,18 +675,18 @@ export default function NewTicketPage() {
         <div className="mt-3 grid grid-cols-2 gap-2">
           <button
             type="button"
-            onClick={() => setBetSource("kalshi")}
+            onClick={() => chooseBetSource("kalshi")}
             className="h-10 rounded-xl border border-zinc-200 text-sm font-extrabold"
             style={{
               background: betSource === "kalshi" ? "#111" : "white",
               color: betSource === "kalshi" ? "white" : "#111",
             }}
           >
-            Kalshi
+            Polymarket
           </button>
           <button
             type="button"
-            onClick={() => setBetSource("sportsbook")}
+            onClick={() => chooseBetSource("sportsbook")}
             className="h-10 rounded-xl border border-zinc-200 text-sm font-extrabold"
             style={{
               background: betSource === "sportsbook" ? "#111" : "white",
@@ -790,7 +805,7 @@ export default function NewTicketPage() {
               {kalshiEntryMode === "towin" && (
                 <div className="mt-3 rounded-xl border border-zinc-200 bg-zinc-50 p-2">
                   <div className="text-[11px] font-semibold text-zinc-600">
-                    Calculator — suggests Risk &amp; Payout below. Adjust them to match what Kalshi
+                    Calculator — suggests Risk &amp; Payout below. Adjust them to match what Polymarket
                     actually shows you before saving.
                   </div>
                   <div className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-4">
@@ -826,7 +841,7 @@ export default function NewTicketPage() {
                         onChange={(e) => setKalshiFeeRatePct(e.target.value)}
                         className={inputClass}
                       />
-                      <div className="mt-1 text-[11px] text-zinc-500">Taker default: 7%</div>
+                      <div className="mt-1 text-[11px] text-zinc-500">Taker tier 3: 7.5% (set your tier)</div>
                     </div>
                     <div className="col-span-1">
                       <FieldLabel>Shares</FieldLabel>
@@ -1177,7 +1192,7 @@ export default function NewTicketPage() {
             </button>
             <button
               type="button"
-              onClick={betSource === "kalshi" ? saveKalshi : save}
+              onClick={betSource === "sportsbook" ? save : saveKalshi}
               className={primaryBtn}
             >
               Save

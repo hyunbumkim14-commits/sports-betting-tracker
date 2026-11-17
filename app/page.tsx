@@ -31,7 +31,9 @@ type Ticket = {
   placed_at: string;
   settled_at: string | null;
   league: string | null;
-  bet_source?: "sportsbook" | "kalshi" | null;
+  bet_source?: "sportsbook" | "kalshi" | "polymarket" | null;
+  needs_review?: boolean | null;
+  review_reason?: string | null;
   market_title?: string | null;
   kalshi_side?: "yes" | "no" | null;
   kalshi_price_cents?: number | null;
@@ -165,6 +167,40 @@ function ticketDateForGrouping(t: Ticket) {
   return localDateKeyFromIso(t.placed_at);
 }
 
+// Kalshi (legacy) and Polymarket tickets share one layout: risk + payout-if-correct, no legs.
+function isPredictionMarket(t: Pick<Ticket, "bet_source">) {
+  return t.bet_source === "kalshi" || t.bet_source === "polymarket";
+}
+function predictionMarketLabel(t: Pick<Ticket, "bet_source">) {
+  return t.bet_source === "polymarket" ? "POLYMARKET" : "KALSHI";
+}
+
+function ReviewBadge({ t, onConfirm }: { t: Ticket; onConfirm?: (t: Ticket) => void }) {
+  if (!t.needs_review) return null;
+  return (
+    <div className="mt-2 rounded-xl border border-amber-300 bg-amber-50 p-2">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 text-[11px] font-bold text-amber-900">
+          Needs review{t.review_reason ? `: ${t.review_reason}` : ""}
+        </div>
+        {onConfirm ? (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onConfirm(t);
+            }}
+            className="shrink-0 rounded-lg bg-amber-600 px-2 py-1 text-[11px] font-extrabold text-white"
+          >
+            Confirm
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function buildDashboardUrl(tab: DashboardTab, selectedDay: string | null) {
   const params = new URLSearchParams();
   params.set("tab", tab);
@@ -269,22 +305,24 @@ function TicketCardInner({
   legs,
   quickUpdatingId,
   onQuickSettle,
+  onConfirm,
   returnTo,
 }: {
   t: Ticket;
   legs: Leg[];
   quickUpdatingId: string | null;
   onQuickSettle?: (t: Ticket, status: Ticket["status"]) => void;
+  onConfirm?: (t: Ticket) => void;
   returnTo: string;
 }) {
   return (
     <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          {t.bet_source === "kalshi" ? (
+          {isPredictionMarket(t) ? (
             <>
               <div className="truncate text-sm font-extrabold">
-                KALSHI • {t.market_title ?? "—"}
+                {predictionMarketLabel(t)} • {t.market_title ?? "—"}
               </div>
               <div className="mt-1 text-xs text-zinc-600">
                 Date: <span className="font-bold">{ticketDateForGrouping(t)}</span> • Side:{" "}
@@ -332,7 +370,9 @@ function TicketCardInner({
         </div>
       </div>
 
-      {t.bet_source === "kalshi" ? (
+      <ReviewBadge t={t} onConfirm={onConfirm} />
+
+      {isPredictionMarket(t) ? (
         <div className="mt-2 text-[11px] text-zinc-500">
           Payout if correct: ${fmtMoney(t.kalshi_payout_if_correct ?? t.stake)}
         </div>
@@ -341,7 +381,7 @@ function TicketCardInner({
       )}
 
       {t.status === "open" ? (
-        <div className={`mt-3 grid gap-2 ${t.bet_source === "kalshi" ? "grid-cols-3" : "grid-cols-4"}`}>
+        <div className={`mt-3 grid gap-2 ${isPredictionMarket(t) ? "grid-cols-3" : "grid-cols-4"}`}>
           <button
             type="button"
             disabled={quickUpdatingId === t.id}
@@ -358,7 +398,7 @@ function TicketCardInner({
           >
             ✖ Loss
           </button>
-          {t.bet_source !== "kalshi" && (
+          {!isPredictionMarket(t) && (
             <button
               type="button"
               disabled={quickUpdatingId === t.id}
@@ -379,7 +419,7 @@ function TicketCardInner({
           {quickUpdatingId === t.id ? (
             <div
               className={`mt-1 text-center text-xs font-bold text-zinc-500 ${
-                t.bet_source === "kalshi" ? "col-span-3" : "col-span-4"
+                isPredictionMarket(t) ? "col-span-3" : "col-span-4"
               }`}
             >
               Updating…
@@ -396,12 +436,14 @@ function TicketList({
   legsByTicket,
   quickUpdatingId,
   onQuickSettle,
+  onConfirm,
   returnTo,
 }: {
   tickets: Ticket[];
   legsByTicket: Record<string, Leg[]>;
   quickUpdatingId: string | null;
   onQuickSettle?: (t: Ticket, status: Ticket["status"]) => void;
+  onConfirm?: (t: Ticket) => void;
   returnTo: string;
 }) {
   return (
@@ -418,6 +460,7 @@ function TicketList({
           legs={legsByTicket[t.id] ?? []}
           quickUpdatingId={quickUpdatingId}
           onQuickSettle={onQuickSettle}
+          onConfirm={onConfirm}
           returnTo={returnTo}
         />
       ))}
@@ -431,6 +474,12 @@ export default function DashboardPage() {
 
   const [authChecked, setAuthChecked] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
+  const [syncNote, setSyncNote] = useState("");
+  const [syncAvailable, setSyncAvailable] = useState(false);
+  const [syncPreview, setSyncPreview] = useState<unknown>(null);
+  const syncingRef = useRef(false);
+  const lastSyncAttemptRef = useRef(0);
 
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [legsByTicket, setLegsByTicket] = useState<Record<string, Leg[]>>({});
@@ -620,15 +669,21 @@ export default function DashboardPage() {
     if (error) alert(error.message);
   }
 
-  async function loadTicketsAndLegs() {
-    setLoading(true);
+  // `quiet` reloads in the background without swapping the whole page for "Loading…".
+  async function loadTicketsAndLegs(quiet = false) {
+    if (!quiet) setLoading(true);
 
-    const { data, error } = await supabase
-      .from("tickets")
-      .select(
-        "id, ticket_type, stake, status, book, payout, profit, placed_at, settled_at, league, bet_source, market_title, kalshi_side, kalshi_price_cents, kalshi_shares, kalshi_fee, kalshi_payout_if_correct"
-      )
-      .order("placed_at", { ascending: false });
+    const BASE_COLUMNS =
+      "id, ticket_type, stake, status, book, payout, profit, placed_at, settled_at, league, bet_source, market_title, kalshi_side, kalshi_price_cents, kalshi_shares, kalshi_fee, kalshi_payout_if_correct";
+    const selectTickets = (cols: string) =>
+      supabase.from("tickets").select(cols).order("placed_at", { ascending: false });
+
+    let { data, error } = await selectTickets(`${BASE_COLUMNS}, needs_review, review_reason`);
+
+    // Until the review columns are added in Supabase, fall back instead of blanking the dashboard.
+    if (error && (error.code === "42703" || /does not exist/i.test(error.message))) {
+      ({ data, error } = await selectTickets(BASE_COLUMNS));
+    }
 
     if (error) {
       console.error(error);
@@ -637,7 +692,7 @@ export default function DashboardPage() {
       return;
     }
 
-    const t = (data ?? []) as Ticket[];
+    const t = (data ?? []) as unknown as Ticket[];
     setTickets(t);
 
     const ids = t.map((x) => x.id);
@@ -691,7 +746,7 @@ export default function DashboardPage() {
       payout = round2(stake);
       profit = 0;
     } else if (status === "won") {
-      if (t.bet_source === "kalshi") {
+      if (isPredictionMarket(t)) {
         payout = round2(Number(t.kalshi_payout_if_correct ?? stake));
         profit = round2(payout - stake);
       } else if (t.ticket_type === "single") {
@@ -749,6 +804,135 @@ export default function DashboardPage() {
       return;
     }
   }
+
+  async function confirmTicket(t: Ticket) {
+    setTickets((prev) => prev.map((x) => (x.id === t.id ? { ...x, needs_review: false, review_reason: null } : x)));
+    const { error } = await supabase
+      .from("tickets")
+      .update({ needs_review: false, review_reason: null })
+      .eq("id", t.id);
+    if (error) {
+      alert(error.message);
+      await loadTicketsAndLegs(true);
+    }
+  }
+
+  async function confirmAllUnreviewed() {
+    const ids = tickets.filter((t) => t.needs_review).map((t) => t.id);
+    if (!ids.length) return;
+    if (!confirm(`Mark all ${ids.length} unreviewed tickets as correct? Only do this after checking them against Polymarket.`)) return;
+    const idSet = new Set(ids);
+    setTickets((prev) => prev.map((x) => (idSet.has(x.id) ? { ...x, needs_review: false, review_reason: null } : x)));
+    const { error } = await supabase.from("tickets").update({ needs_review: false, review_reason: null }).in("id", ids);
+    if (error) {
+      alert(error.message);
+      await loadTicketsAndLegs(true);
+    }
+  }
+
+  // ---------- Polymarket sync ----------
+  // Runs when the tracker opens, when the tab regains focus, and on demand. The key lives
+  // only on the server; this just asks the server route to pull new bets in.
+  async function syncPolymarket(manual: boolean) {
+    if (syncingRef.current) return;
+    // Accounts that aren't the sync owner (or sites without it configured) are told no once per
+    // browser session, then we stop asking. The Sync UI stays hidden for them.
+    try {
+      if (sessionStorage.getItem("pm_sync_off") === "1") return;
+    } catch {}
+    const now = Date.now();
+    if (!manual && now - lastSyncAttemptRef.current < 60_000) return;
+    lastSyncAttemptRef.current = now;
+    syncingRef.current = true;
+    setSyncing(true);
+
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) return;
+
+      const res = await fetch("/api/polymarket/sync", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (res.status === 403 || res.status === 501) {
+        setSyncAvailable(false);
+        try {
+          sessionStorage.setItem("pm_sync_off", "1");
+        } catch {}
+        return;
+      }
+      if (res.status === 401) return;
+      // Anything else means the server accepted us as the owner, so show the Sync controls.
+      setSyncAvailable(true);
+
+      const body = await res.json().catch(() => null);
+      if (!res.ok || !body) {
+        setSyncNote(`Sync failed: ${body?.error ?? `HTTP ${res.status}`}`);
+        return;
+      }
+      if (body.skipped === "throttled") {
+        if (manual) setSyncNote("Already synced a moment ago.");
+        return;
+      }
+      if (body.mode !== "write") {
+        // Preview mode (writes not enabled on the server): show what would be imported, save nothing.
+        if (manual) {
+          const pc = body.counts ?? {};
+          setSyncNote(
+            `Preview only - nothing saved. Would create ${pc.created ?? 0}, settle ${pc.settled ?? 0}, update ${pc.updated ?? 0}` +
+              `, skip ${pc.skippedNonSports ?? 0} non-sports.`
+          );
+          setSyncPreview(body);
+        }
+        return;
+      }
+      setSyncPreview(null);
+
+      const c = body.counts ?? {};
+      const created = c.created ?? 0;
+      const settled = c.settled ?? 0;
+      const updated = c.updated ?? 0;
+      const errs: string[] = body.errors ?? [];
+      const time = new Date(body.syncedAt ?? Date.now()).toLocaleTimeString([], {
+        hour: "numeric",
+        minute: "2-digit",
+      });
+      const bits = [
+        created ? `${created} new` : "",
+        settled ? `${settled} settled` : "",
+        updated ? `${updated} updated` : "",
+        c.skippedClosedEarly || c.skippedNoData
+          ? `${(c.skippedClosedEarly ?? 0) + (c.skippedNoData ?? 0)} not imported (sold early / no position)`
+          : "",
+      ].filter(Boolean);
+      setSyncNote(
+        errs.length
+          ? `Synced ${time} with ${errs.length} error(s): ${errs[0]}`
+          : `Synced ${time}${bits.length ? ` - ${bits.join(", ")}` : ""}`
+      );
+      if (created + settled + updated > 0) await loadTicketsAndLegs(true);
+    } catch {
+      setSyncNote("Sync failed: could not reach the server.");
+    } finally {
+      syncingRef.current = false;
+      setSyncing(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!authChecked) return;
+    syncPolymarket(false);
+    function onVisible() {
+      if (document.visibilityState === "visible") syncPolymarket(false);
+    }
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authChecked]);
+
+  const unreviewedCount = useMemo(() => tickets.filter((t) => t.needs_review).length, [tickets]);
 
   // ---------- Date range (Overview) ----------
   const range = useMemo(() => {
@@ -1160,20 +1344,64 @@ const monthTotal = useMemo(() => {
         <div className="mt-4 space-y-3">
           <div className="flex items-center justify-between gap-3">
             <div className="text-lg font-black">Open Tickets ({fmtNumber(openTicketsAll.length)})</div>
-            <button
-              type="button"
-              onClick={() => loadTicketsAndLegs()}
-              className="inline-flex h-10 items-center justify-center rounded-xl border border-zinc-200 bg-white px-4 text-sm font-extrabold"
-            >
-              Refresh
-            </button>
+            <div className="flex items-center gap-2">
+              {syncAvailable ? (
+                <button
+                  type="button"
+                  onClick={() => syncPolymarket(true)}
+                  disabled={syncing}
+                  className="inline-flex h-10 items-center justify-center rounded-xl bg-black px-4 text-sm font-extrabold text-white disabled:opacity-60"
+                >
+                  {syncing ? "Syncing…" : "Sync now"}
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => loadTicketsAndLegs()}
+                className="inline-flex h-10 items-center justify-center rounded-xl border border-zinc-200 bg-white px-4 text-sm font-extrabold"
+              >
+                Refresh
+              </button>
+            </div>
           </div>
+
+          {syncAvailable && syncNote ? (
+            <div
+              className="text-xs font-bold"
+              style={{ color: syncNote.startsWith("Sync failed") || syncNote.includes("error(s)") ? "#b00020" : "#52525b" }}
+            >
+              {syncNote}
+            </div>
+          ) : null}
+          {syncAvailable && syncPreview ? (
+            <details className="rounded-xl border border-zinc-200 bg-white p-2">
+              <summary className="cursor-pointer text-xs font-extrabold">Preview details (compare with the Polymarket app)</summary>
+              <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words text-[10px] leading-snug text-zinc-700">
+                {JSON.stringify(syncPreview, null, 2)}
+              </pre>
+            </details>
+          ) : null}
+          {unreviewedCount > 0 ? (
+            <div className="flex items-center justify-between gap-2 rounded-xl border border-amber-300 bg-amber-50 p-2">
+              <div className="text-xs font-bold text-amber-800">
+                {unreviewedCount} unreviewed ticket{unreviewedCount === 1 ? "" : "s"} - already counted in your totals until you confirm or fix them. Settled ones show in the Calendar tab.
+              </div>
+              <button
+                type="button"
+                onClick={confirmAllUnreviewed}
+                className="shrink-0 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-extrabold text-white"
+              >
+                Confirm all
+              </button>
+            </div>
+          ) : null}
 
           <TicketList
             tickets={openTicketsAll}
             legsByTicket={legsByTicket}
             quickUpdatingId={quickUpdatingId}
             onQuickSettle={quickSettle}
+            onConfirm={confirmTicket}
             returnTo={returnTo}
           />
         </div>
@@ -1323,10 +1551,10 @@ const monthTotal = useMemo(() => {
                     <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
-                          {t.bet_source === "kalshi" ? (
+                          {isPredictionMarket(t) ? (
                             <>
                               <div className="truncate text-sm font-extrabold">
-                                KALSHI • {t.market_title ?? "—"}
+                                {predictionMarketLabel(t)} • {t.market_title ?? "—"}
                               </div>
                               <div className="mt-1 text-xs text-zinc-600">
                                 Side: <span className="font-bold">{(t.kalshi_side ?? "—").toUpperCase()}</span> •{" "}
@@ -1355,7 +1583,8 @@ const monthTotal = useMemo(() => {
                         </div>
                       </div>
 
-                      {t.bet_source !== "kalshi" && <TicketLines legs={legsByTicket[t.id] ?? []} />}
+                      <ReviewBadge t={t} onConfirm={confirmTicket} />
+                      {!isPredictionMarket(t) && <TicketLines legs={legsByTicket[t.id] ?? []} />}
                     </div>
                   </Link>
                 ))}

@@ -18,7 +18,9 @@ type Ticket = {
   profit: number | null;
   notes: string | null;
   league: string | null;
-  bet_source?: "sportsbook" | "kalshi" | null;
+  bet_source?: "sportsbook" | "kalshi" | "polymarket" | null;
+  needs_review?: boolean | null;
+  review_reason?: string | null;
   market_title?: string | null;
   kalshi_side?: "yes" | "no" | null;
   kalshi_price_cents?: number | null;
@@ -101,6 +103,11 @@ function computeMultiplier(
   }
 }
 
+// Kalshi (legacy) and Polymarket tickets share one editor: risk + payout-if-correct, no legs.
+function isPredictionMarket(t: Pick<Ticket, "bet_source">) {
+  return t.bet_source === "kalshi" || t.bet_source === "polymarket";
+}
+
 function profitColor(n: number) {
   if (n > 0) return "#0f7a2a";
   if (n < 0) return "#b00020";
@@ -179,13 +186,15 @@ export default function TicketPage() {
     async function load() {
       setLoading(true);
 
-      const { data: t, error: tErr } = await supabase
-        .from("tickets")
-        .select(
-          "id, placed_at, settled_at, ticket_type, stake, bet_mode, status, book, payout, profit, notes, league, bet_source, market_title, kalshi_side, kalshi_price_cents, kalshi_shares, kalshi_fee"
-        )
-        .eq("id", id)
-        .single();
+      const BASE_COLUMNS =
+        "id, placed_at, settled_at, ticket_type, stake, bet_mode, status, book, payout, profit, notes, league, bet_source, market_title, kalshi_side, kalshi_price_cents, kalshi_shares, kalshi_fee, kalshi_payout_if_correct";
+      const selectTicket = (cols: string) => supabase.from("tickets").select(cols).eq("id", id).single();
+
+      let { data: t, error: tErr } = await selectTicket(`${BASE_COLUMNS}, needs_review, review_reason`);
+      // Until the review columns exist in Supabase, fall back instead of failing to open the ticket.
+      if (tErr && (tErr.code === "42703" || /does not exist/i.test(tErr.message))) {
+        ({ data: t, error: tErr } = await selectTicket(BASE_COLUMNS));
+      }
 
       if (tErr) {
         console.error(tErr);
@@ -207,7 +216,7 @@ export default function TicketPage() {
         return;
       }
 
-      const ticketRow = t as Ticket;
+      const ticketRow = t as unknown as Ticket;
       const legRows = (l ?? []) as Leg[];
 
       setTicket(ticketRow);
@@ -236,7 +245,7 @@ export default function TicketPage() {
       setPayoutInput(ticketRow.payout === null ? "" : String(ticketRow.payout));
       setPayoutEdited(false);
 
-      if (ticketRow.bet_source === "kalshi") {
+      if (isPredictionMarket(ticketRow)) {
         setKalshiMarketTitle(ticketRow.market_title ?? "");
         setKalshiSideEdit(ticketRow.kalshi_side === "no" ? "no" : "yes");
         setKalshiRiskInput(String(ticketRow.stake ?? 0));
@@ -412,6 +421,8 @@ export default function TicketPage() {
         payout: kalshiEditCalc.payout,
         profit: kalshiEditCalc.profit,
         settled_at: settledAtIso,
+        // Saving counts as confirming. Only sent when the column exists (migration run).
+        ...(ticket.needs_review !== undefined ? { needs_review: false, review_reason: null } : {}),
       })
       .eq("id", ticket.id);
 
@@ -422,6 +433,19 @@ export default function TicketPage() {
     }
 
     router.push(backHref);
+  }
+
+  async function confirmReview() {
+    if (!ticket) return;
+    const { error } = await supabase
+      .from("tickets")
+      .update({ needs_review: false, review_reason: null })
+      .eq("id", ticket.id);
+    if (error) {
+      alert(`Failed to confirm: ${error.message}`);
+      return;
+    }
+    setTicket({ ...ticket, needs_review: false, review_reason: null });
   }
 
   async function saveTicketEdits() {
@@ -558,8 +582,8 @@ export default function TicketPage() {
           <div>
             <div className="text-xs font-semibold text-zinc-500">Ticket</div>
             <h1 className="text-xl font-bold tracking-tight">
-              {ticket.bet_source === "kalshi"
-                ? `KALSHI • ${ticket.market_title ?? "—"}`
+              {isPredictionMarket(ticket)
+                ? `${ticket.bet_source === "polymarket" ? "POLYMARKET" : "KALSHI"} • ${ticket.market_title ?? "—"}`
                 : `${ticket.league ?? "—"} • ${ticket.ticket_type.toUpperCase()}`}
             </h1>
             <div className="mt-1 text-[11px] text-zinc-600">ID: {ticket.id}</div>
@@ -570,10 +594,28 @@ export default function TicketPage() {
           </Link>
         </div>
 
+        {ticket.needs_review ? (
+          <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3">
+            <div className="text-xs font-bold text-amber-900">
+              Needs review{ticket.review_reason ? `: ${ticket.review_reason}` : ""}
+            </div>
+            <div className="mt-1 text-[11px] text-amber-800">
+              Check the numbers against Polymarket. Saving, or Confirm, clears this.
+            </div>
+            <button
+              type="button"
+              onClick={confirmReview}
+              className="mt-2 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-extrabold text-white"
+            >
+              Confirm as correct
+            </button>
+          </div>
+        ) : null}
+
         {/* Summary */}
         {(() => {
           const summary =
-            ticket.bet_source === "kalshi"
+            isPredictionMarket(ticket)
               ? { profit: kalshiEditCalc.profit, payout: kalshiEditCalc.payout }
               : computedPayoutProfit;
           return (
@@ -598,13 +640,13 @@ export default function TicketPage() {
           );
         })()}
 
-        {ticket.bet_source !== "kalshi" && ticket.ticket_type === "single" && (
+        {!isPredictionMarket(ticket) && ticket.ticket_type === "single" && (
           <div className="mt-2 text-[11px] text-zinc-600">
             Single: leg status mirrors ticket status
           </div>
         )}
 
-        {ticket.bet_source === "kalshi" ? (
+        {isPredictionMarket(ticket) ? (
         <>
         {/* Kalshi Market */}
         <div className={`mt-3 ${cardClass}`}>
@@ -947,7 +989,7 @@ export default function TicketPage() {
               </button>
               <button
                 type="button"
-                onClick={ticket.bet_source === "kalshi" ? saveKalshiEdits : saveTicketEdits}
+                onClick={isPredictionMarket(ticket) ? saveKalshiEdits : saveTicketEdits}
                 className={primaryBtn}
               >
                 Save
