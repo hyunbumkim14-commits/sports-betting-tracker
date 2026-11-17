@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import {
   createPolymarketClient,
   mapPositionToTicket,
+  planExistingUpdate,
   readPolymarketCreds,
   scrubSecrets,
   slimActivity,
@@ -39,27 +40,13 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
   return out;
 }
 
-type ExistingTicket = { id: string; external_id: string; status: string; needs_review: boolean | null };
-
-const SYNCED_FIELDS = [
-  "market_title",
-  "league",
-  "kalshi_side",
-  "kalshi_price_cents",
-  "kalshi_shares",
-  "kalshi_fee",
-  "stake",
-  "kalshi_payout_if_correct",
-  "placed_at",
-] as const;
-
-const SETTLEMENT_FIELDS = ["status", "payout", "profit", "settled_at"] as const;
-
-function pick<T extends object>(source: T, keys: readonly (keyof T)[]): Partial<T> {
-  const out: Partial<T> = {};
-  for (const k of keys) out[k] = source[k];
-  return out;
-}
+type ExistingTicket = {
+  id: string;
+  external_id: string;
+  status: string;
+  needs_review: boolean | null;
+  kalshi_shares: number | null;
+};
 
 export async function POST(req: Request) {
   const creds = readPolymarketCreds();
@@ -112,7 +99,7 @@ export async function POST(req: Request) {
 
   const existingRes = await supabase
     .from("tickets")
-    .select("id, external_id, status, needs_review")
+    .select("id, external_id, status, needs_review, kalshi_shares")
     .eq("external_source", "polymarket");
   let existing: ExistingTicket[] = [];
   if (existingRes.error) {
@@ -250,31 +237,16 @@ export async function POST(req: Request) {
       continue;
     }
 
-    if (prior.status !== "open") {
+    const plan = planExistingUpdate(prior, t);
+    if (plan.action === "unchanged") {
       counts.unchanged++;
       continue;
     }
-
-    const unconfirmed = prior.needs_review === true;
-    const settlingNow = t.status !== "open";
-
-    if (!settlingNow && !unconfirmed) {
-      counts.unchanged++;
-      continue;
-    }
-
-    const patch: Record<string, unknown> = {};
-    if (unconfirmed) Object.assign(patch, pick(t, SYNCED_FIELDS));
-    if (settlingNow) Object.assign(patch, pick(t, SETTLEMENT_FIELDS));
-    if (t.needs_review) {
-      patch.needs_review = true;
-      patch.review_reason = t.review_reason;
-      counts.flagged++;
-    }
-    planned.push({ action: settlingNow ? "settle" : "update", ticket: t });
-    if (settlingNow) counts.settled++;
+    if (plan.flagged) counts.flagged++;
+    planned.push({ action: plan.action, ticket: t });
+    if (plan.action === "settle") counts.settled++;
     else counts.updated++;
-    updates.push({ id: prior.id, patch });
+    updates.push({ id: prior.id, patch: plan.patch });
   }
 
   const syncedAt = new Date().toISOString();

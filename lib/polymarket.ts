@@ -557,6 +557,72 @@ export function mapPositionToTicket({ slug, position, activities, market }: MapI
   };
 }
 
+/* ------------------------- deciding what to change ------------------------- */
+
+const SYNCED_FIELDS = [
+  "market_title",
+  "league",
+  "kalshi_side",
+  "kalshi_price_cents",
+  "kalshi_shares",
+  "kalshi_fee",
+  "stake",
+  "kalshi_payout_if_correct",
+  "placed_at",
+] as const satisfies readonly (keyof MappedTicket)[];
+
+const SETTLEMENT_FIELDS = ["status", "payout", "profit", "settled_at"] as const satisfies readonly (keyof MappedTicket)[];
+
+export type ExistingSyncedTicket = {
+  status: string;
+  needs_review: boolean | null;
+  kalshi_shares: number | null;
+};
+
+export type UpdatePlan = {
+  action: "unchanged" | "update" | "settle";
+  patch: Record<string, unknown>;
+  flagged: boolean;
+};
+
+function pickFields<T extends object>(source: T, keys: readonly (keyof T)[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of keys) out[k as string] = source[k];
+  return out;
+}
+
+// What to do with a ticket the sync already created. Settled tickets are never touched. An open
+// ticket you've confirmed is only changed when something real happened on Polymarket: it settled,
+// or more contracts filled (a limit order that kept filling). Fill growth is re-flagged for review
+// because it moves your risk and overwrites any hand edits to those numbers.
+export function planExistingUpdate(prior: ExistingSyncedTicket, t: MappedTicket): UpdatePlan {
+  if (prior.status !== "open") return { action: "unchanged", patch: {}, flagged: false };
+
+  const unconfirmed = prior.needs_review === true;
+  const settlingNow = t.status !== "open";
+  const grew = prior.kalshi_shares !== null && prior.kalshi_shares !== t.kalshi_shares;
+
+  if (!settlingNow && !unconfirmed && !grew) return { action: "unchanged", patch: {}, flagged: false };
+
+  const patch: Record<string, unknown> = {};
+  if (unconfirmed || grew) Object.assign(patch, pickFields(t, SYNCED_FIELDS));
+  if (settlingNow) Object.assign(patch, pickFields(t, SETTLEMENT_FIELDS));
+
+  let flagged = false;
+  if (grew) {
+    const note = `Contracts changed from ${prior.kalshi_shares} to ${t.kalshi_shares} (more of a limit order filled) - re-check risk and payout`;
+    patch.needs_review = true;
+    patch.review_reason = [note, t.review_reason].filter(Boolean).join("; ");
+    flagged = true;
+  } else if (t.needs_review) {
+    patch.needs_review = true;
+    patch.review_reason = t.review_reason;
+    flagged = true;
+  }
+
+  return { action: settlingNow ? "settle" : "update", patch, flagged };
+}
+
 /* ------------------------- compact preview sample ------------------------- */
 
 const slimMeta = (m?: PMMarketMetadata | null) =>
