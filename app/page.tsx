@@ -9,6 +9,7 @@ import Link from "next/link";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../lib/supabase";
+import { classifySyncStatus, isConfirmedOwner, isPaused, recordSyncOutcome } from "../lib/syncGate";
 import {
   LineChart,
   Line,
@@ -833,14 +834,20 @@ export default function DashboardPage() {
   // ---------- Polymarket sync ----------
   // Runs when the tracker opens, when the tab regains focus, and on demand. The key lives
   // only on the server; this just asks the server route to pull new bets in.
+  function browserStore(kind: "local" | "session") {
+    try {
+      return kind === "local" ? window.localStorage : window.sessionStorage;
+    } catch {
+      return null;
+    }
+  }
+
   async function syncPolymarket(manual: boolean) {
     if (syncingRef.current) return;
-    // Accounts that aren't the sync owner (or sites without it configured) are told no once per
-    // browser session, then we stop asking. The Sync UI stays hidden for them.
-    try {
-      if (sessionStorage.getItem("pm_sync_off") === "1") return;
-    } catch {}
     const now = Date.now();
+    // Other accounts are told no and then left alone for a while. A "not configured" answer only
+    // pauses briefly, so it clears itself once the server is set up. Tapping Sync now always asks.
+    if (!manual && isPaused(browserStore("session"), now)) return;
     if (!manual && now - lastSyncAttemptRef.current < 60_000) return;
     lastSyncAttemptRef.current = now;
     syncingRef.current = true;
@@ -849,6 +856,7 @@ export default function DashboardPage() {
     try {
       const { data } = await supabase.auth.getSession();
       const token = data.session?.access_token;
+      const uid = data.session?.user?.id;
       if (!token) return;
 
       const res = await fetch("/api/polymarket/sync", {
@@ -856,16 +864,21 @@ export default function DashboardPage() {
         headers: { Authorization: `Bearer ${token}` },
       });
 
-      if (res.status === 403 || res.status === 501) {
+      const outcome = classifySyncStatus(res.status);
+      recordSyncOutcome(outcome, uid, browserStore("local"), browserStore("session"), Date.now());
+
+      if (outcome === "owner") {
+        setSyncAvailable(true);
+      } else if (outcome === "not-owner") {
         setSyncAvailable(false);
-        try {
-          sessionStorage.setItem("pm_sync_off", "1");
-        } catch {}
+        return;
+      } else if (outcome === "not-configured") {
+        // Keep the button if we already know you're the owner; just say why nothing happened.
+        if (manual) setSyncNote("Sync isn't set up on the server right now. Try again in a minute.");
+        return;
+      } else {
         return;
       }
-      if (res.status === 401) return;
-      // Anything else means the server accepted us as the owner, so show the Sync controls.
-      setSyncAvailable(true);
 
       const body = await res.json().catch(() => null);
       if (!res.ok || !body) {
@@ -923,6 +936,11 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (!authChecked) return;
+    // Show the Sync controls straight away for a browser the server already confirmed as the
+    // owner, so a slow or failed check can't hide them. Other accounts never get this flag.
+    supabase.auth.getSession().then(({ data }) => {
+      if (isConfirmedOwner(browserStore("local"), data.session?.user?.id)) setSyncAvailable(true);
+    });
     syncPolymarket(false);
     function onVisible() {
       if (document.visibilityState === "visible") syncPolymarket(false);
